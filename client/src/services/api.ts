@@ -2,9 +2,10 @@ import axios from "axios";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 
 const isDev = import.meta.env.MODE === "development";
+
 const baseURL =
   import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
-  (isDev ? "http://localhost:4000" : "https://your-production-domain.com");
+  (isDev ? "http://localhost:4000" : "https://quiz-app-xgwd.onrender.com");
 
 console.log("🌍 Using API Base URL:", baseURL);
 
@@ -13,14 +14,15 @@ const api = axios.create({
   withCredentials: false,
 });
 
-// ✅ Token handling
+// ✅ Firebase token handling
 let currentToken: string | null = null;
 const auth = getAuth();
+
 onAuthStateChanged(auth, async (user) => {
   currentToken = user ? await user.getIdToken() : null;
 });
 
-// ✅ Attach token to every request
+// ✅ Attach token automatically
 api.interceptors.request.use(async (config) => {
   const user = auth.currentUser;
   if (user) {
@@ -30,7 +32,7 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
-// ✅ Helper: Extract chapters from uploaded file
+// ✅ File upload for chapter extraction
 export async function extractChapters(file: File) {
   const formData = new FormData();
   formData.append("file", file);
@@ -52,11 +54,11 @@ export async function extractChapters(file: File) {
   }
 }
 
-// ✅ Helper: Submit a saved quiz and get resultId for redirect
+// ✅ Quiz submission
 export async function submitQuiz(quizId: string, answers: Record<string, string>) {
   try {
     const res = await api.post(`/quiz/${quizId}/submit`, { answers });
-    return res.data; // { ok, score, resultId }
+    return res.data;
   } catch (err: any) {
     console.error("❌ submitQuiz failed:", err);
     throw new Error(err?.response?.data?.error || "Failed to submit quiz");
