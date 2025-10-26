@@ -13,73 +13,60 @@ import chapterRoutes from "./routes/chapterRoutes.js";
 
 const app = express();
 
-/* --------------------------------------------- */
-/* 🌐 CORS CONFIGURATION                         */
-/* --------------------------------------------- */
+// ✅ Define allowed origins clearly
 const allowedOrigins = [
-  "http://localhost:5173", // Local frontend
-  "http://localhost:4000", // Local server (for tools or postman)
-  "https://quiz-app-xi-lemon-15.vercel.app", // ✅ Deployed frontend
-  process.env.CLIENT_URL, // Optional fallback from .env
+  "http://localhost:5173",
+  "http://localhost:4000",
+  process.env.CLIENT_URL,
 ].filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true); // Allow server-to-server or curl requests
-      const isAllowed = allowedOrigins.some((allowed) =>
-        origin.startsWith(allowed)
-      );
-      if (isAllowed) {
-        callback(null, true);
-      } else {
-        console.warn("🚫 Blocked CORS origin:", origin);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  })
-);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+  }
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, Accept"
+  );
+  res.header("Access-Control-Allow-Credentials", "true");
 
-/* --------------------------------------------- */
-/* 🧠 EXPRESS MIDDLEWARE                         */
-/* --------------------------------------------- */
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200); // ✅ Handle preflight requests immediately
+  }
+  next();
+});
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Log incoming requests (for debugging)
+// ✅ Log incoming requests for debugging
 app.use((req, _res, next) => {
   console.log(`➡️ ${req.method} ${req.originalUrl}`);
   next();
 });
 
-/* --------------------------------------------- */
-/* 🚀 ROUTES                                     */
-/* --------------------------------------------- */
+// ✅ API Routes
 app.use("/api/ai", aiRoutes);
 app.use("/api/quiz", quizRoutes);
 app.use("/api/room", roomRoutes);
 app.use("/api/chapter", chapterRoutes);
 
-// Health check route
-app.get("/health", (_req, res) => res.json({ ok: true, now: Date.now() }));
+// ✅ Health check
+app.get("/health", (_req, res) =>
+  res.json({ ok: true, now: Date.now(), env: process.env.NODE_ENV })
+);
 
-/* --------------------------------------------- */
-/* 🏗️ SERVE CLIENT BUILD (Optional)              */
-/* --------------------------------------------- */
+// ✅ Serve client build if enabled
 if (process.env.SERVE_CLIENT === "true") {
   const clientBuild = path.join(__dirname, "..", "..", "client", "dist");
   app.use(express.static(clientBuild));
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(clientBuild, "index.html"));
-  });
+  app.get("*", (_req, res) =>
+    res.sendFile(path.join(clientBuild, "index.html"))
+  );
 }
 
-/* --------------------------------------------- */
-/* 🟢 START SERVER                               */
-/* --------------------------------------------- */
 const PORT = Number(process.env.PORT) || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);

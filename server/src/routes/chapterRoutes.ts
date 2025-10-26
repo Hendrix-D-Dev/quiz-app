@@ -28,8 +28,36 @@ const upload = multer({
   },
 });
 
+// ✅ Apply lightweight CORS headers on this route
+router.options("/extract-chapters", (req, res) => {
+  const origin = req.headers.origin;
+  const allowed = [
+    "http://localhost:5173",
+    "http://localhost:4000",
+    process.env.CLIENT_URL,
+  ].filter(Boolean);
+  if (origin && allowed.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+  }
+  res.header("Access-Control-Allow-Methods", "POST,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.sendStatus(200);
+});
+
 router.post("/extract-chapters", upload.single("file"), async (req, res) => {
   try {
+    const origin = req.headers.origin;
+    const allowed = [
+      "http://localhost:5173",
+      "http://localhost:4000",
+      process.env.CLIENT_URL,
+    ].filter(Boolean);
+    if (origin && allowed.includes(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+    }
+    res.header("Access-Control-Allow-Credentials", "true");
+
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     debugLogger("chapterRoutes", {
@@ -49,7 +77,6 @@ router.post("/extract-chapters", upload.single("file"), async (req, res) => {
     });
 
     if (chapters.length === 0) {
-      // ✅ fallback mode — no chapters found
       debugLogger("chapterRoutes", { step: "no-chapters-fallback" });
       return res.json({ ok: true, chapters: [], fallback: true, text });
     }
@@ -57,7 +84,9 @@ router.post("/extract-chapters", upload.single("file"), async (req, res) => {
     res.json({ ok: true, chapters });
   } catch (err: any) {
     debugLogger("chapterRoutes", { step: "error", error: err });
-    res.status(500).json({ error: err.message || "Failed to extract chapters" });
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to extract chapters" });
   }
 });
 
