@@ -31,7 +31,7 @@ const CreateRoom = () => {
 
     try {
       const resp = await axios.post("/api/room/create", {
-        host: (user as any)?.uid || user || "unknown",
+        host: user?.uid || "unknown",
         roomName,
         timeLimit,
         maxQuestions,

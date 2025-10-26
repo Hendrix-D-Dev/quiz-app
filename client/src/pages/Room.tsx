@@ -37,7 +37,6 @@ const Room = () => {
     }
   }, [code, role]);
 
-  // countdown
   useEffect(() => {
     if (timeLeft === null || !started) return;
     if (timeLeft <= 0) {

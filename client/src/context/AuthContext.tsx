@@ -28,7 +28,8 @@ export interface AppUser extends User {
 
 interface AuthState {
   user: AppUser | null;
-  loading: boolean; // ✅ added
+  role: UserRole; // ✅ added
+  loading: boolean;
   login: (email: string, password: string, specialKey?: string) => Promise<UserRole>;
   signup: (email: string, password: string, specialKey?: string) => Promise<UserRole>;
   logout: () => Promise<void>;
@@ -39,7 +40,8 @@ interface AuthState {
 /* -------------------------------------- */
 const AuthContext = createContext<AuthState>({
   user: null,
-  loading: true, // ✅ added
+  role: "student",
+  loading: true,
   login: async () => "student",
   signup: async () => "student",
   logout: async () => {},
@@ -52,11 +54,8 @@ export const useAuth = () => useContext(AuthContext);
 /* -------------------------------------- */
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<AppUser | null>(null);
-  const [loading, setLoading] = useState(true); // ✅ track initialization
+  const [loading, setLoading] = useState(true);
 
-  /**
-   * Determines role based on a provided admin key
-   */
   const detectRole = (specialKey?: string): UserRole => {
     const adminKey = import.meta.env.VITE_ADMIN_KEY;
     return specialKey && adminKey && specialKey === adminKey
@@ -64,9 +63,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       : "student";
   };
 
-  /* -------------------------------------- */
-  /* 🔑 LOGIN                               */
-  /* -------------------------------------- */
   const login = async (
     email: string,
     password: string,
@@ -82,9 +78,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return detectedRole;
   };
 
-  /* -------------------------------------- */
-  /* 📝 SIGNUP                              */
-  /* -------------------------------------- */
   const signup = async (
     email: string,
     password: string,
@@ -100,18 +93,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return detectedRole;
   };
 
-  /* -------------------------------------- */
-  /* 🚪 LOGOUT                              */
-  /* -------------------------------------- */
   const logout = async () => {
     await signOut(auth);
     setUser(null);
     localStorage.removeItem("quiz_role");
   };
 
-  /* -------------------------------------- */
-  /* 🔁 PERSIST USER + ROLE                 */
-  /* -------------------------------------- */
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
@@ -121,15 +108,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       } else {
         setUser(null);
       }
-      setLoading(false); // ✅ finished initialization
+      setLoading(false);
     });
 
     return () => unsub();
   }, []);
 
+  // ✅ role getter
+  const role = user?.role || "student";
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, signup, logout }}>
-      {!loading && children} {/* ✅ only render children after auth init */}
+    <AuthContext.Provider value={{ user, role, loading, login, signup, logout }}>
+      {!loading && children}
     </AuthContext.Provider>
   );
 };
