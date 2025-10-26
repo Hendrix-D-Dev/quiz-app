@@ -1,0 +1,53 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "Quiz System Backend",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "ts-node --esm src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "clean": "rmdir /s /q node_modules && del /f /q package-lock.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@langchain/google-genai": "^1.0.0",
+    "@langchain/textsplitters": "^1.0.0",
+    "@types/jsdom": "^27.0.0",
+    "axios": "^1.12.2",
+    "canvas": "^3.2.0",
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "epub2": "^3.0.2",
+    "express": "^5.1.0",
+    "firebase-admin": "^13.5.0",
+    "jsdom": "^27.0.0",
+    "jsonfile": "^6.2.0",
+    "langchain": "^1.0.1",
+    "mammoth": "^1.11.0",
+    "multer": "^2.0.2",
+    "node-fetch": "^3.3.2",
+    "papaparse": "^5.5.3",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^3.11.174",
+    "tesseract.js": "^6.0.1",
+    "textract": "^2.5.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^20.14.10",
+    "@types/node-fetch": "^2.6.13",
+    "@types/papaparse": "^5.3.16",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,32 @@
+:root {
+  --teal: #0d9488;
+  --sky: #0284c7;
+  --indigo: #4f46e5;
+  --slate-bg: #f8fafc;
+  --ui-radius: 12px;
+  --ui-font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+}
+
+body {
+  font-family: var(--ui-font);
+  background-color: var(--slate-bg);
+}
+
+/* Cards */
+.card {
+  border-radius: var(--ui-radius);
+  background: white;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+/* Buttons */
+.btn-primary {
+  background: var(--teal);
+  color: white;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+
+.btn-primary:hover {
+  background: #0f766e;
+}
