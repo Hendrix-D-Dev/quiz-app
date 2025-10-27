@@ -5,6 +5,7 @@ import {
   submitQuiz,
   submitGeneratedQuiz,
   getResults,
+  getLatestResult, // ✅ new
 } from "../controllers/quizController.js";
 import { verifyFirebaseTokenMiddleware } from "./_helpers.js";
 
@@ -18,6 +19,9 @@ router.get("/:id", getQuiz);
 
 // Protected: get user's results
 router.get("/results/all", verifyFirebaseTokenMiddleware, getResults);
+
+// Protected: get latest result (new endpoint)
+router.get("/results/latest", verifyFirebaseTokenMiddleware, getLatestResult);
 
 // Protected: submit saved quiz and return resultId
 router.post("/:id/submit", verifyFirebaseTokenMiddleware, submitQuiz);

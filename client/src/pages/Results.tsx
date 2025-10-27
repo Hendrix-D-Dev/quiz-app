@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import api, { fetchPastResults } from "../services/api";
-import { getAuth } from "firebase/auth";
+import api, { fetchPastResults, fetchLatestResult } from "../services/api";
 import { saveAs } from "file-saver";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 
@@ -25,16 +24,9 @@ const Results = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const auth = getAuth();
-        const user = auth.currentUser;
-        const token = user ? await user.getIdToken() : null;
-
-        // Fetch single/latest result
-        const url = id ? `/quiz/results/${id}` : "/quiz/results/latest";
-        const res = await api.get(url, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        setResult(res.data || null);
+        // Fetch single result by ID or latest result
+        const res = id ? await api.get(`/quiz/results/${id}`) : await fetchLatestResult();
+        setResult(res?.data || res || null);
 
         // Fetch all past results
         const allResults = await fetchPastResults();
@@ -74,19 +66,13 @@ const Results = () => {
           children: [
             new Paragraph({
               children: [
-                new TextRun({
-                  text: "Quiz Result Summary",
-                  bold: true,
-                  size: 32,
-                }),
+                new TextRun({ text: "Quiz Result Summary", bold: true, size: 32 }),
               ],
             }),
             new Paragraph(""),
             new Paragraph(`Quiz Title: ${r.quizTitle}`),
             new Paragraph(`Score: ${r.score}/${r.total}`),
-            new Paragraph(
-              `Percentage: ${((r.score / r.total) * 100).toFixed(1)}%`
-            ),
+            new Paragraph(`Percentage: ${((r.score / r.total) * 100).toFixed(1)}%`),
             new Paragraph(`Date: ${new Date(r.createdAt).toLocaleString()}`),
           ],
         },
@@ -118,14 +104,7 @@ const Results = () => {
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="relative flex items-center justify-center">
             <svg className="w-32 h-32 -rotate-90">
-              <circle
-                cx="64"
-                cy="64"
-                r="56"
-                stroke="#e5e7eb"
-                strokeWidth="10"
-                fill="transparent"
-              />
+              <circle cx="64" cy="64" r="56" stroke="#e5e7eb" strokeWidth="10" fill="transparent" />
               <circle
                 cx="64"
                 cy="64"
@@ -150,17 +129,12 @@ const Results = () => {
           </div>
 
           <div className="flex-1">
-            <h3 className="text-xl font-semibold text-gray-800 mb-2">
-              {result.quizTitle}
-            </h3>
+            <h3 className="text-xl font-semibold text-gray-800 mb-2">{result.quizTitle}</h3>
             <p className="text-sm text-gray-600 mb-3">
               {new Date(result.createdAt).toLocaleString()}
             </p>
             <p className="text-lg font-medium text-gray-700">
-              Score:{" "}
-              <span className="text-emerald-600 font-bold">
-                {result.score} / {result.total}
-              </span>
+              Score: <span className="text-emerald-600 font-bold">{result.score} / {result.total}</span>
             </p>
           </div>
         </div>
@@ -209,9 +183,7 @@ const Results = () => {
                       <td className="p-2 border">{r.score}</td>
                       <td className="p-2 border">{r.total}</td>
                       <td className="p-2 border">{pct}%</td>
-                      <td className="p-2 border">
-                        {new Date(r.createdAt).toLocaleString()}
-                      </td>
+                      <td className="p-2 border">{new Date(r.createdAt).toLocaleString()}</td>
                       <td className="p-2 border flex gap-2">
                         <button
                           onClick={() => exportCSV(r)}

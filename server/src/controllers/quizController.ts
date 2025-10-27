@@ -29,56 +29,11 @@ export async function getQuiz(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const doc = await db.collection("quizzes").doc(id).get();
-    if (!doc.exists) {
-      debugLogger("quizController", { step: "getQuiz", id, error: "not-found" });
-      return res.status(404).json({ error: "Quiz not found" });
-    }
+    if (!doc.exists) return res.status(404).json({ error: "Quiz not found" });
     res.json({ id: doc.id, ...doc.data() });
   } catch (err) {
     debugLogger("quizController", { step: "getQuiz-error", err });
     res.status(500).json({ error: "Failed to get quiz" });
-  }
-}
-
-/** POST /api/quiz/create */
-export async function createQuiz(req: Request, res: Response) {
-  try {
-    const { title, description, text, numQuestions = 10, difficulty = "normal" } = req.body;
-
-    if (!title || !text) return res.status(400).json({ error: "Missing quiz title or text" });
-
-    if (text.trim().length < 1200) {
-      return res.status(400).json({
-        error: "Text too short. Please provide a longer document for quiz generation.",
-      });
-    }
-
-    const questions = await generateQuestionsFromText(text, Number(numQuestions), difficulty);
-
-    if (!questions.length) {
-      return res.status(500).json({
-        error: "No valid questions generated. Try with a longer or more factual text.",
-      });
-    }
-
-    const quiz: Quiz = {
-      id: "",
-      title,
-      description,
-      questions,
-      createdBy: (req as any).verifiedUid || "anonymous",
-      createdAt: Date.now(),
-    };
-
-    const docRef = await db.collection("quizzes").add(quiz);
-    quiz.id = docRef.id;
-    await docRef.update({ id: docRef.id });
-
-    debugLogger("quizController", { step: "createQuiz", id: quiz.id });
-    res.json({ ok: true, quiz });
-  } catch (err) {
-    debugLogger("quizController", { step: "createQuiz-error", err });
-    res.status(500).json({ error: "Failed to create quiz" });
   }
 }
 
@@ -87,20 +42,14 @@ export async function submitQuiz(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const payload = req.body as SubmitPayload;
-
     if (!id) return res.status(400).json({ error: "Missing quiz ID" });
 
     const docRef = db.collection("quizzes").doc(id);
     const doc = await docRef.get();
-
-    if (!doc.exists) {
-      debugLogger("quizController", { step: "submitQuiz", id, error: "quiz-not-found" });
-      return res.status(404).json({ error: "Quiz not found" });
-    }
+    if (!doc.exists) return res.status(404).json({ error: "Quiz not found" });
 
     const quiz = doc.data() as Quiz;
     const questions = quiz?.questions || [];
-
     let correct = 0;
     const total = questions.length;
     const answerMap = payload.answers || {};
@@ -123,7 +72,6 @@ export async function submitQuiz(req: Request, res: Response) {
     const resultRef = await db.collection("results").add(score);
     debugLogger("quizController", { step: "submitQuiz-success", resultId: resultRef.id });
 
-    // Return resultId for frontend redirect
     res.json({ ok: true, score, resultId: resultRef.id });
   } catch (err) {
     debugLogger("quizController", { step: "submitQuiz-error", err });
@@ -153,7 +101,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
   }
 }
 
-/** GET /api/quiz/results */
+/** GET /api/quiz/results/all */
 export async function getResults(req: Request, res: Response) {
   try {
     const uid = (req as any).verifiedUid;
@@ -170,47 +118,28 @@ export async function getResults(req: Request, res: Response) {
     const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     res.json(data);
   } catch (err: any) {
-    if (err.code === 5) return res.json([]);
     res.status(500).json({ error: "Failed to fetch results" });
   }
 }
 
-/** POST /api/room/create */
-export async function createRoomQuiz(req: Request, res: Response) {
+/** ✅ GET /api/quiz/results/latest */
+export async function getLatestResult(req: Request, res: Response) {
   try {
-    const { host, roomName, timeLimit, maxQuestions, roomCode, docText, difficulty = "normal" } =
-      req.body;
+    const uid = (req as any).verifiedUid;
+    if (!uid) return res.json(null);
 
-    if (!roomName || !timeLimit || !maxQuestions || !roomCode) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
+    const snap = await db
+      .collection("results")
+      .where("uid", "==", uid)
+      .orderBy("createdAt", "desc")
+      .limit(1)
+      .get();
 
-    let questions: any[] = [];
-    if (docText) {
-      if (docText.trim().length < 1200) {
-        return res.status(400).json({
-          error: "Text too short for quiz generation. Please upload a longer file.",
-        });
-      }
-      questions = await generateQuestionsFromText(docText, Number(maxQuestions), difficulty);
-    }
+    if (snap.empty) return res.json(null);
 
-    const roomData = {
-      host,
-      roomName,
-      timeLimit,
-      maxQuestions,
-      roomCode,
-      questions,
-      createdAt: Date.now(),
-    };
-
-    await db.collection("rooms").doc(roomCode).set(roomData);
-    debugLogger("quizController", { step: "createRoomQuiz", roomCode });
-
-    res.json({ ok: true, roomId: roomCode, roomData });
-  } catch (err) {
-    debugLogger("quizController", { step: "createRoomQuiz-error", err });
-    res.status(500).json({ error: "Failed to create room quiz" });
+    const doc = snap.docs[0];
+    res.json({ id: doc.id, ...doc.data() });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to fetch latest result" });
   }
 }

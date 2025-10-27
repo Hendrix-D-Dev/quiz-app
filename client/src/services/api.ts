@@ -14,7 +14,7 @@ const api = axios.create({
   withCredentials: false,
 });
 
-// ✅ Firebase token handling
+// 🔑 Firebase token handling
 let currentToken: string | null = null;
 const auth = getAuth();
 
@@ -22,7 +22,7 @@ onAuthStateChanged(auth, async (user) => {
   currentToken = user ? await user.getIdToken() : null;
 });
 
-// ✅ Attach token automatically
+// ✅ Attach token automatically to all requests
 api.interceptors.request.use(async (config) => {
   const user = auth.currentUser;
   if (user) {
@@ -54,7 +54,7 @@ export async function extractChapters(file: File) {
   }
 }
 
-// ✅ Quiz submission
+// ✅ Submit a quiz
 export async function submitQuiz(
   quizId: string,
   answers: Record<string, string>
@@ -82,6 +82,23 @@ export async function fetchPastResults() {
   } catch (err: any) {
     console.error("❌ fetchPastResults failed:", err);
     throw new Error(err?.response?.data?.error || "Failed to fetch past results");
+  }
+}
+
+// ✅ Fetch latest result for current user
+export async function fetchLatestResult() {
+  try {
+    const user = auth.currentUser;
+    const token = user ? await user.getIdToken() : null;
+
+    const res = await api.get("/quiz/results/latest", {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    return res.data || null;
+  } catch (err: any) {
+    console.error("❌ fetchLatestResult failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to fetch latest result");
   }
 }
 
