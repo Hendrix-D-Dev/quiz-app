@@ -8,11 +8,13 @@ interface Props {
 }
 
 const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
-  const [selected, setSelected] = useState<number[]>([]);
-  const toggle = (index: number) =>
+  const [selected, setSelected] = useState<string[]>([]);
+
+  const toggle = (id: string) => {
     setSelected((prev) =>
-      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
+  };
 
   const isQuarterMode = chapters.some((c) => c.title.startsWith("Quarter"));
 
@@ -28,22 +30,25 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
       </p>
 
       <div className="max-h-80 overflow-y-auto border rounded-lg divide-y">
-        {chapters.map((ch) => (
-          <label
-            key={ch.index}
-            className="flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50"
-          >
-            <input
-              type="checkbox"
-              checked={selected.includes(ch.index)}
-              onChange={() => toggle(ch.index)}
-              className="h-4 w-4 text-emerald-600"
-            />
-            <span className="text-sm text-gray-800">
-              {ch.title || `Chapter ${ch.index + 1}`}
-            </span>
-          </label>
-        ))}
+        {chapters.map((ch, i) => {
+          const id = ch.title || `chapter-${i}`;
+          return (
+            <label
+              key={id}
+              className="flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50"
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(id)}
+                onChange={() => toggle(id)}
+                className="h-4 w-4 text-emerald-600"
+              />
+              <span className="text-sm text-gray-800">
+                {ch.title || `Chapter ${i + 1}`}
+              </span>
+            </label>
+          );
+        })}
       </div>
 
       <div className="flex justify-end gap-3 mt-5">
@@ -57,8 +62,8 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
         )}
         <button
           onClick={() => {
-            const selectedChapters = chapters.filter((c) =>
-              selected.includes(c.index)
+            const selectedChapters = chapters.filter((c, i) =>
+              selected.includes(c.title || `chapter-${i}`)
             );
             onConfirm(selectedChapters);
           }}

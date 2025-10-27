@@ -55,13 +55,33 @@ export async function extractChapters(file: File) {
 }
 
 // ✅ Quiz submission
-export async function submitQuiz(quizId: string, answers: Record<string, string>) {
+export async function submitQuiz(
+  quizId: string,
+  answers: Record<string, string>
+) {
   try {
     const res = await api.post(`/quiz/${quizId}/submit`, { answers });
     return res.data;
   } catch (err: any) {
     console.error("❌ submitQuiz failed:", err);
     throw new Error(err?.response?.data?.error || "Failed to submit quiz");
+  }
+}
+
+// ✅ Fetch all past results for the current user
+export async function fetchPastResults() {
+  try {
+    const user = auth.currentUser;
+    const token = user ? await user.getIdToken() : null;
+
+    const res = await api.get("/quiz/results/all", {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    return res.data || [];
+  } catch (err: any) {
+    console.error("❌ fetchPastResults failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to fetch past results");
   }
 }
 

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import api from "../services/api";
+import api, { fetchPastResults } from "../services/api";
 import { getAuth } from "firebase/auth";
+import { saveAs } from "file-saver";
+import { Document, Packer, Paragraph, TextRun } from "docx";
 
 type Result = {
   id?: string;
@@ -9,35 +11,90 @@ type Result = {
   score: number;
   total: number;
   createdAt: number;
+  user?: string;
 };
 
 const Results = () => {
-  const { id } = useParams(); // receive resultId from URL
+  const { id } = useParams();
   const [result, setResult] = useState<Result | null>(null);
+  const [pastResults, setPastResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const percentage = result ? (result.score / result.total) * 100 : 0;
+
   useEffect(() => {
-    const fetchResult = async () => {
+    const fetchData = async () => {
       try {
         const auth = getAuth();
         const user = auth.currentUser;
         const token = user ? await user.getIdToken() : null;
 
-        const url = id ? `/quiz/results/${id}` : "/quiz/results/all";
+        // Fetch single/latest result
+        const url = id ? `/quiz/results/${id}` : "/quiz/results/latest";
         const res = await api.get(url, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-
         setResult(res.data || null);
+
+        // Fetch all past results
+        const allResults = await fetchPastResults();
+        setPastResults(allResults);
       } catch (err) {
-        console.error("Failed to load results:", err);
+        console.error("❌ Failed to load results:", err);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchResult();
+    fetchData();
   }, [id]);
+
+  const exportCSV = (r: Result) => {
+    const csvData = [
+      ["Quiz Title", "Score", "Total", "Percentage", "Date"],
+      [
+        r.quizTitle,
+        r.score,
+        r.total,
+        `${((r.score / r.total) * 100).toFixed(1)}%`,
+        new Date(r.createdAt).toLocaleString(),
+      ],
+    ]
+      .map((row) => row.join(","))
+      .join("\n");
+
+    const blob = new Blob([csvData], { type: "text/csv;charset=utf-8" });
+    saveAs(blob, `${r.quizTitle}-result.csv`);
+  };
+
+  const exportDOCX = async (r: Result) => {
+    const doc = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: "Quiz Result Summary",
+                  bold: true,
+                  size: 32,
+                }),
+              ],
+            }),
+            new Paragraph(""),
+            new Paragraph(`Quiz Title: ${r.quizTitle}`),
+            new Paragraph(`Score: ${r.score}/${r.total}`),
+            new Paragraph(
+              `Percentage: ${((r.score / r.total) * 100).toFixed(1)}%`
+            ),
+            new Paragraph(`Date: ${new Date(r.createdAt).toLocaleString()}`),
+          ],
+        },
+      ],
+    });
+    const blob = await Packer.toBlob(doc);
+    saveAs(blob, `${r.quizTitle}-result.docx`);
+  };
 
   if (loading)
     return <p className="text-gray-600 text-center mt-10">Loading results...</p>;
@@ -51,38 +108,132 @@ const Results = () => {
     );
 
   return (
-    <main className="min-h-screen bg-gray-50 py-10 px-6">
-      <div className="max-w-4xl mx-auto bg-white shadow-lg rounded-2xl p-8">
-        <h2 className="text-3xl font-bold text-blue-700 mb-8 text-center border-b pb-4">
+    <main className="min-h-screen bg-gradient-to-br from-emerald-50 to-blue-50 py-12 px-6 flex flex-col items-center gap-10">
+      {/* Current Result */}
+      <div className="bg-white w-full max-w-2xl rounded-2xl shadow-lg p-8 animate-fade-in">
+        <h2 className="text-3xl font-bold text-emerald-700 mb-6 text-center border-b pb-3">
           Quiz Result
         </h2>
 
-        <div className="flex justify-between items-center bg-blue-50 border border-blue-100 transition-all duration-200 p-5 rounded-xl shadow-sm">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-800">{result.quizTitle}</h3>
-            <p className="text-sm text-gray-500 mt-1">
-              {new Date(result.createdAt).toLocaleString()}
-            </p>
+        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="relative flex items-center justify-center">
+            <svg className="w-32 h-32 -rotate-90">
+              <circle
+                cx="64"
+                cy="64"
+                r="56"
+                stroke="#e5e7eb"
+                strokeWidth="10"
+                fill="transparent"
+              />
+              <circle
+                cx="64"
+                cy="64"
+                r="56"
+                stroke={
+                  percentage >= 70
+                    ? "#16a34a"
+                    : percentage >= 40
+                    ? "#facc15"
+                    : "#dc2626"
+                }
+                strokeWidth="10"
+                strokeDasharray={2 * Math.PI * 56}
+                strokeDashoffset={2 * Math.PI * 56 * (1 - percentage / 100)}
+                strokeLinecap="round"
+                fill="transparent"
+              />
+            </svg>
+            <span className="absolute text-2xl font-semibold text-gray-800">
+              {percentage.toFixed(0)}%
+            </span>
           </div>
 
-          <div className="text-right">
-            <span
-              className={`text-xl font-bold ${
-                result.score / result.total >= 0.7
-                  ? "text-green-600"
-                  : result.score / result.total >= 0.4
-                  ? "text-yellow-600"
-                  : "text-red-600"
-              }`}
-            >
-              {result.score}/{result.total}
-            </span>
-            <p className="text-xs text-gray-500 mt-1">
-              {((result.score / result.total) * 100).toFixed(1)}%
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-gray-800 mb-2">
+              {result.quizTitle}
+            </h3>
+            <p className="text-sm text-gray-600 mb-3">
+              {new Date(result.createdAt).toLocaleString()}
+            </p>
+            <p className="text-lg font-medium text-gray-700">
+              Score:{" "}
+              <span className="text-emerald-600 font-bold">
+                {result.score} / {result.total}
+              </span>
             </p>
           </div>
         </div>
+
+        <div className="flex justify-center gap-4 mt-8">
+          <button
+            onClick={() => exportCSV(result)}
+            className="px-4 py-2 rounded-md bg-emerald-600 text-white font-medium hover:bg-emerald-700 transition"
+          >
+            Export CSV
+          </button>
+          <button
+            onClick={() => exportDOCX(result)}
+            className="px-4 py-2 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition"
+          >
+            Export DOCX
+          </button>
+        </div>
       </div>
+
+      {/* Past Results */}
+      {pastResults.length > 0 && (
+        <div className="bg-white w-full max-w-4xl rounded-2xl shadow-lg p-6 animate-fade-in">
+          <h3 className="text-2xl font-semibold text-gray-800 mb-4 text-center border-b pb-2">
+            Past Results
+          </h3>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="p-2 border">Quiz Title</th>
+                  <th className="p-2 border">Score</th>
+                  <th className="p-2 border">Total</th>
+                  <th className="p-2 border">Percentage</th>
+                  <th className="p-2 border">Date</th>
+                  <th className="p-2 border">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pastResults.map((r) => {
+                  const pct = ((r.score / r.total) * 100).toFixed(1);
+                  return (
+                    <tr key={r.id} className="hover:bg-gray-50 transition">
+                      <td className="p-2 border">{r.quizTitle}</td>
+                      <td className="p-2 border">{r.score}</td>
+                      <td className="p-2 border">{r.total}</td>
+                      <td className="p-2 border">{pct}%</td>
+                      <td className="p-2 border">
+                        {new Date(r.createdAt).toLocaleString()}
+                      </td>
+                      <td className="p-2 border flex gap-2">
+                        <button
+                          onClick={() => exportCSV(r)}
+                          className="px-2 py-1 bg-emerald-600 text-white rounded-md text-sm hover:bg-emerald-700 transition"
+                        >
+                          CSV
+                        </button>
+                        <button
+                          onClick={() => exportDOCX(r)}
+                          className="px-2 py-1 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 transition"
+                        >
+                          DOCX
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </main>
   );
 };

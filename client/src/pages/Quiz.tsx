@@ -37,27 +37,24 @@ const Quiz = () => {
   };
 
   const goNext = () => setCurrentIndex((i) => Math.min(i + 1, total - 1));
-  const goPrev = () => setCurrentIndex((i) => Math.max(i, 0));
+  const goPrev = () => setCurrentIndex((i) => Math.max(i - 1, 0));
   const jumpTo = (index: number) =>
     setCurrentIndex(Math.min(Math.max(0, index), Math.max(0, total - 1)));
 
   const handleSubmit = async () => {
     try {
       let resultId: string | null = null;
-      if (id) {
-        const res = await api.post(`/quiz/${id}/submit`, { answers, roomMode });
-        resultId = res.data.resultId; // backend should return this
-      } else {
-        const res = await api.post("/quiz/submit", { answers });
-        resultId = res.data.resultId;
-      }
+      const res = await api.post(id ? `/quiz/${id}/submit` : "/quiz/submit", {
+        answers,
+        roomMode,
+      });
+      resultId = res.data?.resultId || null;
 
       setSubmitted(true);
 
       // ✅ Navigate to results page after submission
-      if (resultId) {
-        navigate(`/results/${resultId}`);
-      }
+      if (resultId) navigate(`/results/${resultId}`);
+      else navigate("/results");
     } catch (err) {
       console.error("❌ Submit failed:", err);
       alert("Failed to submit quiz. Please try again.");
@@ -67,7 +64,7 @@ const Quiz = () => {
   // ✅ Show submitted state
   if (submitted) {
     return (
-      <div className="p-8 flex flex-col items-center justify-center text-center">
+      <div className="p-10 flex flex-col items-center justify-center text-center">
         <h2 className="text-3xl font-bold text-emerald-700 mb-2">
           Quiz Submitted!
         </h2>
@@ -76,9 +73,7 @@ const Quiz = () => {
             Waiting for other participants... Results will appear once the room closes.
           </p>
         ) : (
-          <p className="text-gray-700">
-            Redirecting you to your results...
-          </p>
+          <p className="text-gray-700">Redirecting you to your results...</p>
         )}
       </div>
     );
