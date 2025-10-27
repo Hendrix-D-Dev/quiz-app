@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { db } from "../config/firebaseAdmin.js";
-import type { Room, Participant } from "../utils/types.js";
+import type { Room, Participant, Question } from "../utils/types.js";
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 
 // Helper: generate random 6-letter code
@@ -8,29 +8,50 @@ const generateRoomCode = () =>
   Math.random().toString(36).substring(2, 8).toUpperCase();
 
 /**
- * Create a new room
+ * Create a new room (Admin only - requires auth middleware)
  */
 export const createRoom = async (req: Request, res: Response) => {
   try {
-    const { quizId, createdBy, timeLimit, questionCount } = req.body;
+    const verifiedUid = (req as any).verifiedUid;
+    const { quizId, timeLimit, questionCount, roomName } = req.body;
 
-    if (!quizId || !createdBy || !timeLimit || !questionCount) {
+    // Validate required fields
+    if (!quizId || !timeLimit || !questionCount) {
       return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Verify the quiz exists
+    const quizDoc = await db.collection("quizzes").doc(quizId).get();
+    if (!quizDoc.exists) {
+      return res.status(404).json({ error: "Quiz not found" });
+    }
+
+    const quiz = quizDoc.data();
+    const availableQuestions = quiz?.questions?.length || 0;
+
+    // Validate question count
+    if (questionCount > availableQuestions) {
+      return res.status(400).json({
+        error: `Quiz only has ${availableQuestions} questions, cannot create room with ${questionCount}`,
+      });
     }
 
     const code = generateRoomCode();
     const room: Room = {
       code,
       quizId,
-      createdBy,
-      timeLimit,
-      questionCount,
+      createdBy: verifiedUid,
+      timeLimit: Number(timeLimit), // in seconds
+      questionCount: Number(questionCount),
+      roomName: roomName || `Room ${code}`,
       createdAt: Date.now(),
+      status: "active",
+      participantCount: 0,
     };
 
     await db.collection("rooms").doc(code).set(room);
 
-    res.json({ message: "Room created", room });
+    res.json({ message: "Room created successfully", room });
   } catch (err) {
     console.error("Error creating room:", err);
     res.status(500).json({ error: "Failed to create room" });
@@ -38,27 +59,53 @@ export const createRoom = async (req: Request, res: Response) => {
 };
 
 /**
- * Get room + quiz details
+ * Get room + quiz details (Public - students need this)
  */
 export const getRoom = async (req: Request, res: Response) => {
   try {
     const { code } = req.params;
 
-    const roomDoc = await db.collection("rooms").doc(code).get();
+    const roomDoc = await db.collection("rooms").doc(code.toUpperCase()).get();
     if (!roomDoc.exists) {
       return res.status(404).json({ error: "Room not found" });
     }
+
     const room = roomDoc.data() as Room;
 
+    // Check if room is closed
+    if (room.status === "closed") {
+      return res.status(403).json({ error: "This room has been closed" });
+    }
+
+    // Fetch the quiz
     const quizDoc = await db.collection("quizzes").doc(room.quizId).get();
     if (!quizDoc.exists) {
-      return res.status(404).json({ error: "Quiz not found" });
+      return res.status(404).json({ error: "Quiz not found for this room" });
     }
+
     const quiz = quizDoc.data();
+    
+    // Only send the specified number of questions (without correct answers)
+    const questions = (quiz?.questions || [])
+      .slice(0, room.questionCount)
+      .map((q: Question) => ({
+        id: q.id,
+        question: q.question,
+        options: q.options,
+        difficulty: q.difficulty,
+      }));
 
-    const questions = (quiz?.questions || []).slice(0, room.questionCount);
-
-    res.json({ room, questions, timeLimit: room.timeLimit });
+    res.json({
+      room: {
+        code: room.code,
+        roomName: room.roomName,
+        timeLimit: room.timeLimit,
+        questionCount: room.questionCount,
+        status: room.status,
+      },
+      questions,
+      timeLimit: room.timeLimit,
+    });
   } catch (err) {
     console.error("Error fetching room:", err);
     res.status(500).json({ error: "Failed to fetch room" });
@@ -66,31 +113,89 @@ export const getRoom = async (req: Request, res: Response) => {
 };
 
 /**
- * Submit answers
+ * Submit answers (Public - students don't need auth)
+ * Grades the answers and stores the result with score
  */
 export const submitAnswers = async (req: Request, res: Response) => {
   try {
     const { code } = req.params;
     const { name, matric, answers } = req.body;
 
-    if (!name || !matric || !answers) {
-      return res.status(400).json({ error: "Missing required fields" });
+    // Validate input - answers should be Record<questionId, answer>
+    if (!name || !matric || !answers || typeof answers !== "object") {
+      return res.status(400).json({ error: "Missing required fields (name, matric, answers)" });
     }
+
+    // Get room details
+    const roomDoc = await db.collection("rooms").doc(code.toUpperCase()).get();
+    if (!roomDoc.exists) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    const room = roomDoc.data() as Room;
+
+    // Check if room is closed
+    if (room.status === "closed") {
+      return res.status(403).json({ error: "Room is closed, cannot submit" });
+    }
+
+    // Fetch the quiz to grade answers
+    const quizDoc = await db.collection("quizzes").doc(room.quizId).get();
+    if (!quizDoc.exists) {
+      return res.status(404).json({ error: "Quiz not found" });
+    }
+
+    const quiz = quizDoc.data();
+    const questions: Question[] = (quiz?.questions || []).slice(0, room.questionCount);
+
+    // Grade the submission
+    let correctCount = 0;
+    const gradedAnswers = questions.map((question: Question) => {
+      const userAnswer = answers[question.id] || "";
+      const isCorrect = question.correctAnswer === userAnswer;
+      if (isCorrect) correctCount++;
+
+      return {
+        question: question.question,
+        userAnswer,
+        correctAnswer: question.correctAnswer,
+        isCorrect,
+      };
+    });
+
+    const score = questions.length > 0 
+      ? Math.round((correctCount / questions.length) * 100) 
+      : 0;
 
     const participant: Participant = {
       name,
       matric,
-      answers,
+      answers: gradedAnswers,
+      score,
+      correctCount,
+      totalQuestions: questions.length,
       submittedAt: Date.now(),
     };
 
-    await db
+    // Store participant submission
+    const docRef = await db
       .collection("rooms")
-      .doc(code)
+      .doc(code.toUpperCase())
       .collection("participants")
       .add(participant);
 
-    res.json({ message: "Submission saved", participant });
+    // Update participant count in room
+    await db.collection("rooms").doc(code.toUpperCase()).update({
+      participantCount: (room.participantCount || 0) + 1,
+    });
+
+    res.json({
+      message: "Submission saved successfully",
+      submissionId: docRef.id,
+      score,
+      correctCount,
+      totalQuestions: questions.length,
+    });
   } catch (err) {
     console.error("Error submitting answers:", err);
     res.status(500).json({ error: "Failed to submit answers" });
@@ -98,16 +203,33 @@ export const submitAnswers = async (req: Request, res: Response) => {
 };
 
 /**
- * Get participants (admin only)
+ * Get participants (Admin only - requires auth)
+ * Verifies the requesting user is the room creator
  */
 export const getParticipants = async (req: Request, res: Response) => {
   try {
+    const verifiedUid = (req as any).verifiedUid;
     const { code } = req.params;
 
+    // Get room to verify ownership
+    const roomDoc = await db.collection("rooms").doc(code.toUpperCase()).get();
+    if (!roomDoc.exists) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    const room = roomDoc.data() as Room;
+
+    // Verify the user is the room creator
+    if (room.createdBy !== verifiedUid) {
+      return res.status(403).json({ error: "Only the room creator can view participants" });
+    }
+
+    // Fetch all participants
     const snapshot = await db
       .collection("rooms")
-      .doc(code)
+      .doc(code.toUpperCase())
       .collection("participants")
+      .orderBy("submittedAt", "desc")
       .get();
 
     const participants = snapshot.docs.map(
@@ -117,9 +239,53 @@ export const getParticipants = async (req: Request, res: Response) => {
       })
     );
 
-    res.json({ participants });
+    res.json({
+      room: {
+        code: room.code,
+        roomName: room.roomName,
+        status: room.status,
+        participantCount: room.participantCount || participants.length,
+        createdAt: room.createdAt,
+      },
+      participants,
+    });
   } catch (err) {
     console.error("Error fetching participants:", err);
     res.status(500).json({ error: "Failed to fetch participants" });
+  }
+};
+
+/**
+ * Close room (Admin only - requires auth)
+ * Prevents new submissions
+ */
+export const closeRoom = async (req: Request, res: Response) => {
+  try {
+    const verifiedUid = (req as any).verifiedUid;
+    const { code } = req.params;
+
+    // Get room to verify ownership
+    const roomDoc = await db.collection("rooms").doc(code.toUpperCase()).get();
+    if (!roomDoc.exists) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    const room = roomDoc.data() as Room;
+
+    // Verify the user is the room creator
+    if (room.createdBy !== verifiedUid) {
+      return res.status(403).json({ error: "Only the room creator can close this room" });
+    }
+
+    // Update room status
+    await db.collection("rooms").doc(code.toUpperCase()).update({
+      status: "closed",
+      closedAt: Date.now(),
+    });
+
+    res.json({ message: "Room closed successfully", code: room.code });
+  } catch (err) {
+    console.error("Error closing room:", err);
+    res.status(500).json({ error: "Failed to close room" });
   }
 };

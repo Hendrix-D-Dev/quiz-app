@@ -4,20 +4,25 @@ import {
   getRoom,
   submitAnswers,
   getParticipants,
+  closeRoom,
 } from "../controllers/roomController.js";
+import { verifyFirebaseTokenMiddleware } from "../middleware/authMiddleware.js";
 
 const router = Router();
 
-// POST /api/room/create
-router.post("/create", createRoom);
+// Admin-only: Create room (requires auth)
+router.post("/create", verifyFirebaseTokenMiddleware, createRoom);
 
-// GET /api/room/:code
+// Public: Get room details (students need this to join)
 router.get("/:code", getRoom);
 
-// POST /api/room/:code/submit
+// Public: Submit answers (students don't need auth, just name/matric)
 router.post("/:code/submit", submitAnswers);
 
-// GET /api/room/:code/participants
-router.get("/:code/participants", getParticipants);
+// Admin-only: Get participants (requires auth)
+router.get("/:code/participants", verifyFirebaseTokenMiddleware, getParticipants);
+
+// Admin-only: Close room (requires auth)
+router.post("/:code/close", verifyFirebaseTokenMiddleware, closeRoom);
 
 export default router;

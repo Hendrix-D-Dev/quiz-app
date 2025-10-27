@@ -32,7 +32,9 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
-// ✅ File upload for chapter extraction
+// ========================================
+// 📄 CHAPTER EXTRACTION
+// ========================================
 export async function extractChapters(file: File) {
   const formData = new FormData();
   formData.append("file", file);
@@ -54,7 +56,9 @@ export async function extractChapters(file: File) {
   }
 }
 
-// ✅ Submit a quiz
+// ========================================
+// 📝 QUIZ SUBMISSIONS & RESULTS
+// ========================================
 export async function submitQuiz(
   quizId: string,
   answers: Record<string, string>
@@ -68,7 +72,6 @@ export async function submitQuiz(
   }
 }
 
-// ✅ Fetch all past results for the current user
 export async function fetchPastResults() {
   try {
     const user = auth.currentUser;
@@ -85,7 +88,6 @@ export async function fetchPastResults() {
   }
 }
 
-// ✅ Fetch latest result for current user
 export async function fetchLatestResult() {
   try {
     const user = auth.currentUser;
@@ -99,6 +101,100 @@ export async function fetchLatestResult() {
   } catch (err: any) {
     console.error("❌ fetchLatestResult failed:", err);
     throw new Error(err?.response?.data?.error || "Failed to fetch latest result");
+  }
+}
+
+// ========================================
+// 🏠 ROOM API METHODS
+// ========================================
+
+/**
+ * Create a new room (Admin only - requires auth)
+ */
+export async function createRoom(data: {
+  quizId: string;
+  timeLimit: number; // in seconds
+  questionCount: number;
+  roomName?: string;
+}) {
+  try {
+    const res = await api.post("/room/create", data);
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ createRoom failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to create room");
+  }
+}
+
+/**
+ * Get room details and questions (Public - no auth needed)
+ */
+export async function getRoom(code: string) {
+  try {
+    const res = await api.get(`/room/${code.toUpperCase()}`);
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ getRoom failed:", err);
+    throw new Error(err?.response?.data?.error || "Room not found");
+  }
+}
+
+/**
+ * Submit room quiz answers (Public - no auth needed)
+ */
+export async function submitRoomAnswers(
+  code: string,
+  data: {
+    name: string;
+    matric: string;
+    answers: Record<string, string>; // questionId -> answer
+  }
+) {
+  try {
+    const res = await api.post(`/room/${code.toUpperCase()}/submit`, data);
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ submitRoomAnswers failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to submit answers");
+  }
+}
+
+/**
+ * Get room participants (Admin only - requires auth)
+ */
+export async function getRoomParticipants(code: string) {
+  try {
+    const res = await api.get(`/room/${code.toUpperCase()}/participants`);
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ getRoomParticipants failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to fetch participants");
+  }
+}
+
+/**
+ * Close a room (Admin only - requires auth)
+ */
+export async function closeRoom(code: string) {
+  try {
+    const res = await api.post(`/room/${code.toUpperCase()}/close`);
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ closeRoom failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to close room");
+  }
+}
+
+/**
+ * Fetch all quizzes (for room creation dropdown)
+ */
+export async function fetchAllQuizzes() {
+  try {
+    const res = await api.get("/quiz");
+    return res.data || [];
+  } catch (err: any) {
+    console.error("❌ fetchAllQuizzes failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to fetch quizzes");
   }
 }
 
