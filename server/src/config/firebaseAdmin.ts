@@ -6,7 +6,14 @@ import admin from "firebase-admin";
 import type { Firestore } from "firebase-admin/firestore";
 import { debugLogger } from "../utils/debugLogger.js";
 
+/**
+ * Firebase Admin initialization (TypeScript)
+ * - Ensures the PRIVATE_KEY is formatted correctly
+ * - Initializes Firestore and Storage
+ * - Exports db, auth, storage, bucket
+ */
 
+// Load env vars
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
 let privateKey = process.env.FIREBASE_PRIVATE_KEY;
@@ -40,6 +47,8 @@ if (!projectId || !clientEmail || !privateKey) {
 privateKey = privateKey.replace(/^"(.*)"$/s, "$1").replace(/\\n/g, "\n");
 
 // Defensive initialization (avoid "already exists" error when running tests / hot reload)
+let db: Firestore, auth: any, storage: any, bucket: any;
+
 if (!admin.apps.length) {
   const credential = {
     projectId,
@@ -55,11 +64,6 @@ if (!admin.apps.length) {
     });
     debugLogger("firebaseAdmin", { step: "initialized" });
     
-    // Test Firestore connection
-    const testDb = admin.firestore();
-    await testDb.listCollections(); // This will throw if connection fails
-    debugLogger("firebaseAdmin", { step: "firestore-connected" });
-    
   } catch (err: any) {
     debugLogger("firebaseAdmin", { 
       step: "init-error", 
@@ -72,26 +76,55 @@ if (!admin.apps.length) {
   debugLogger("firebaseAdmin", { step: "already-initialized" });
 }
 
-// Exports for other modules
-const db: Firestore = admin.firestore();
-const auth = admin.auth();
-const storage = admin.storage();
-const bucket = storage.bucket(storageBucket || "");
+// Initialize Firebase services
+db = admin.firestore();
+auth = admin.auth();
+storage = admin.storage();
+bucket = storage.bucket(storageBucket || "");
 
-// Test results collection exists
-try {
-  const collections = await db.listCollections();
-  const collectionNames = collections.map(col => col.id);
-  debugLogger("firebaseAdmin", { 
-    step: "collections-check",
-    collections: collectionNames,
-    hasResults: collectionNames.includes('results')
-  });
-} catch (err: any) {
-  debugLogger("firebaseAdmin", { 
-    step: "collections-check-failed", 
-    error: err.message 
-  });
+// ✅ Async function to test connection (called separately)
+export async function testFirebaseConnection(): Promise<boolean> {
+  try {
+    debugLogger("firebaseAdmin", { step: "testing-connection" });
+    
+    // Test Firestore connection
+    await db.listCollections();
+    debugLogger("firebaseAdmin", { step: "firestore-connected" });
+    
+    // Test if results collection exists (create if needed)
+    try {
+      const collections = await db.listCollections();
+      const collectionNames = collections.map(col => col.id);
+      debugLogger("firebaseAdmin", { 
+        step: "collections-check",
+        collections: collectionNames,
+        hasResults: collectionNames.includes('results')
+      });
+      
+      // If results collection doesn't exist, it will be created automatically on first write
+      if (!collectionNames.includes('results')) {
+        debugLogger("firebaseAdmin", { 
+          step: "results-collection-missing",
+          note: "Results collection will be created automatically on first write" 
+        });
+      }
+    } catch (collectionsError: any) {
+      debugLogger("firebaseAdmin", { 
+        step: "collections-check-failed", 
+        error: collectionsError.message,
+        note: "This is normal for new Firebase projects" 
+      });
+    }
+    
+    return true;
+  } catch (error: any) {
+    debugLogger("firebaseAdmin", { 
+      step: "connection-test-failed", 
+      error: error.message,
+      code: error.code 
+    });
+    return false;
+  }
 }
 
 export { admin, db, auth, storage, bucket };

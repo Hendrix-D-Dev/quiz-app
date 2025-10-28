@@ -105,11 +105,11 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       quizTitle 
     });
 
-    // For generated quizzes, we need to calculate score and save to results
+    
     let correct = 0;
     const total = answeredCount;
     
-    // Calculate score (assuming answers contain correctAnswer for comparison)
+   
     Object.values(answers).forEach((answer: any) => {
       if (answer.isCorrect) correct++;
     });
