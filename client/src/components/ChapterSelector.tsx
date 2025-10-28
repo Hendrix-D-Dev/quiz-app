@@ -16,66 +16,176 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
     );
   };
 
+  const selectAll = () => {
+    setSelected(chapters.map((c, i) => c.title || `chapter-${i}`));
+  };
+
+  const clearAll = () => {
+    setSelected([]);
+  };
+
   const isQuarterMode = chapters.some((c) => c.title.startsWith("Quarter"));
 
   return (
-    <div className="bg-white p-6 rounded-2xl shadow-xl max-w-2xl w-full mx-4">
-      <h2 className="text-2xl font-bold mb-3 text-emerald-700 text-center">
-        {isQuarterMode ? "Select Document Quarters" : "Select Chapters for Quiz"}
-      </h2>
-      <p className="text-gray-600 text-sm mb-5 text-center">
-        {isQuarterMode
-          ? "Choose one or more document quarters to generate questions from."
-          : "Select which chapters to include in your quiz."}
-      </p>
+    <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full mx-auto overflow-hidden animate-fade-in">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 text-white">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center space-x-3">
+            <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold">
+                {isQuarterMode ? "Select Document Quarters" : "Select Chapters"}
+              </h2>
+              <p className="text-indigo-100 text-sm">
+                {selected.length} of {chapters.length} selected
+              </p>
+            </div>
+          </div>
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+        <p className="text-indigo-100 text-sm">
+          {isQuarterMode
+            ? "Choose document sections to generate questions from"
+            : "Pick chapters to include in your quiz"}
+        </p>
+      </div>
 
-      <div className="max-h-80 overflow-y-auto border rounded-lg divide-y">
+      {/* Action Buttons */}
+      <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={selectAll}
+            className="px-4 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+          >
+            Select All
+          </button>
+          <button
+            onClick={clearAll}
+            className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            Clear All
+          </button>
+        </div>
+        <span className="text-sm text-slate-600 font-medium">
+          {chapters.length} {chapters.length === 1 ? "chapter" : "chapters"} available
+        </span>
+      </div>
+
+      {/* Chapters List */}
+      <div className="max-h-96 overflow-y-auto p-6 space-y-2">
         {chapters.map((ch, i) => {
           const id = ch.title || `chapter-${i}`;
+          const isSelected = selected.includes(id);
+          
           return (
             <label
               key={id}
-              className="flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50"
+              className={`group flex items-center space-x-4 p-4 rounded-xl cursor-pointer border-2 transition-all ${
+                isSelected
+                  ? "border-indigo-500 bg-gradient-to-r from-indigo-50 to-purple-50 shadow-md"
+                  : "border-slate-200 hover:border-indigo-200 hover:bg-slate-50"
+              }`}
             >
+              {/* Custom Checkbox */}
+              <div className={`flex-shrink-0 w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${
+                isSelected
+                  ? "bg-gradient-to-br from-indigo-600 to-purple-600 border-indigo-600"
+                  : "border-slate-300 group-hover:border-indigo-400"
+              }`}>
+                {isSelected && (
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </div>
+              
               <input
                 type="checkbox"
-                checked={selected.includes(id)}
+                checked={isSelected}
                 onChange={() => toggle(id)}
-                className="h-4 w-4 text-emerald-600"
+                className="sr-only"
               />
-              <span className="text-sm text-gray-800">
-                {ch.title || `Chapter ${i + 1}`}
-              </span>
+              
+              {/* Chapter Info */}
+              <div className="flex-1">
+                <span className={`font-semibold block ${isSelected ? "text-indigo-900" : "text-slate-800"}`}>
+                  {ch.title || `Chapter ${i + 1}`}
+                </span>
+                {ch.content && (
+                  <span className="text-xs text-slate-500 mt-1 block">
+                    {Math.round(ch.content.length / 500)} min read
+                  </span>
+                )}
+              </div>
+
+              {/* Number Badge */}
+              <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
+                isSelected
+                  ? "bg-indigo-600 text-white"
+                  : "bg-slate-100 text-slate-600 group-hover:bg-indigo-100"
+              }`}>
+                {i + 1}
+              </div>
             </label>
           );
         })}
       </div>
 
-      <div className="flex justify-end gap-3 mt-5">
-        {onCancel && (
+      {/* Footer */}
+      <div className="p-6 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-4">
+        <div className="text-sm text-slate-600">
+          {selected.length === 0 ? (
+            <span>Please select at least one chapter</span>
+          ) : (
+            <span className="font-semibold text-indigo-600">
+              Ready to generate {selected.length} {selected.length === 1 ? "chapter" : "chapters"}
+            </span>
+          )}
+        </div>
+        
+        <div className="flex items-center gap-3">
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="px-6 py-2.5 rounded-xl bg-white border-2 border-slate-200 text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
           <button
-            onClick={onCancel}
-            className="px-4 py-2 rounded-md bg-gray-100 hover:bg-gray-200 transition"
+            onClick={() => {
+              const selectedChapters = chapters.filter((c, i) =>
+                selected.includes(c.title || `chapter-${i}`)
+              );
+              onConfirm(selectedChapters);
+            }}
+            disabled={selected.length === 0}
+            className={`flex items-center space-x-2 px-6 py-2.5 rounded-xl font-semibold transition-all ${
+              selected.length > 0
+                ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg hover:scale-105"
+                : "bg-slate-300 text-slate-500 cursor-not-allowed"
+            }`}
           >
-            Cancel
+            <span>Generate Quiz</span>
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
           </button>
-        )}
-        <button
-          onClick={() => {
-            const selectedChapters = chapters.filter((c, i) =>
-              selected.includes(c.title || `chapter-${i}`)
-            );
-            onConfirm(selectedChapters);
-          }}
-          disabled={selected.length === 0}
-          className={`px-4 py-2 rounded-md text-white font-medium ${
-            selected.length
-              ? "bg-emerald-600 hover:bg-emerald-700"
-              : "bg-emerald-300 cursor-not-allowed"
-          }`}
-        >
-          Generate Quiz
-        </button>
+        </div>
       </div>
     </div>
   );
