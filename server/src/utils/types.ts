@@ -73,3 +73,16 @@ export type QuizResult = {
   correctCount: number;
   submittedAt: number;
 };
+
+// =========================
+// ✅ NEW: Result type for Firebase results collection
+// =========================
+export type Result = {
+  id?: string;
+  quizId: string;
+  quizTitle: string;
+  uid: string;
+  score: number;
+  total: number;
+  createdAt: number;
+};
