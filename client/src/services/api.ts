@@ -72,6 +72,25 @@ export async function submitQuiz(
   }
 }
 
+// ✅ Add this function to fetch a specific result by ID
+export async function fetchResultById(resultId: string) {
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new Error("User not authenticated");
+
+    const token = await user.getIdToken();
+    
+    const res = await api.get(`/quiz/results/${resultId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ fetchResultById failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to fetch result");
+  }
+}
+
 export async function fetchPastResults() {
   try {
     const user = auth.currentUser;
@@ -88,17 +107,28 @@ export async function fetchPastResults() {
   }
 }
 
+// ✅ Improved fetchLatestResult with better error handling
 export async function fetchLatestResult() {
   try {
     const user = auth.currentUser;
-    const token = user ? await user.getIdToken() : null;
+    if (!user) {
+      console.warn("⚠️ No user authenticated for fetchLatestResult");
+      return null;
+    }
 
+    const token = await user.getIdToken();
+    
     const res = await api.get("/quiz/results/latest", {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: { Authorization: `Bearer ${token}` },
     });
 
     return res.data || null;
   } catch (err: any) {
+    // Don't throw error if no results found, just return null
+    if (err?.response?.status === 404 || err?.message?.includes("No results")) {
+      console.log("ℹ️ No latest result found");
+      return null;
+    }
     console.error("❌ fetchLatestResult failed:", err);
     throw new Error(err?.response?.data?.error || "Failed to fetch latest result");
   }

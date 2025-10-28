@@ -4,7 +4,7 @@ import Home from "./pages/Home";
 import Quiz from "./pages/Quiz";
 import Results from "./pages/Results";
 import AdminDashboard from "./pages/AdminDashboard";
-import { useAuth } from "./context/AuthContext"; // removed unused AuthProvider import
+import { useAuth } from "./context/AuthContext";
 import AuthPage from "./pages/AuthPage";
 import CreateRoom from "./pages/CreateRoom";
 import JoinRoom from "./pages/JoinRoom";
@@ -14,12 +14,12 @@ import StudentHome from "./pages/StudentHome";
 import "./index.css";
 import "./App.css";
 
-// ✅ Optional wrapper to protect role-based routes
+// ✅ Protect role-based routes
 const ProtectedRoute = ({
   children,
   role,
 }: {
-  children: React.ReactElement; // changed from JSX.Element to React.ReactElement
+  children: React.ReactElement;
   role: "admin" | "student";
 }) => {
   const { user, loading } = useAuth();
@@ -34,6 +34,7 @@ function App() {
   return (
     <Router>
       <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+        {/* ✅ Navbar is rendered once globally */}
         <Navbar />
         <main className="flex-1 container mx-auto px-4 py-6">
           <Routes>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import api, { fetchPastResults, fetchLatestResult } from "../services/api";
+import { fetchPastResults, fetchLatestResult, fetchResultById } from "../services/api"; // ✅ Removed unused 'api' import
 import { saveAs } from "file-saver";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 
@@ -18,21 +18,30 @@ const Results = () => {
   const [result, setResult] = useState<Result | null>(null);
   const [pastResults, setPastResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const percentage = result ? (result.score / result.total) * 100 : 0;
 
   useEffect(() => {
     const fetchData = async () => {
       try {
+        setError(null);
+        
         // Fetch single result by ID or latest result
-        const res = id ? await api.get(`/quiz/results/${id}`) : await fetchLatestResult();
-        setResult(res?.data || res || null);
+        let resultData = null;
+        if (id) {
+          resultData = await fetchResultById(id);
+        } else {
+          resultData = await fetchLatestResult();
+        }
+        setResult(resultData);
 
         // Fetch all past results
         const allResults = await fetchPastResults();
         setPastResults(allResults);
-      } catch (err) {
+      } catch (err: any) {
         console.error("❌ Failed to load results:", err);
+        setError(err.message || "Failed to load results");
       } finally {
         setLoading(false);
       }
@@ -81,6 +90,21 @@ const Results = () => {
     const blob = await Packer.toBlob(doc);
     saveAs(blob, `${r.quizTitle}-result.docx`);
   };
+
+  if (error) {
+    return (
+      <div className="text-center text-red-600 mt-10">
+        <p className="text-lg font-medium mb-2">Error loading results</p>
+        <p className="text-sm">{error}</p>
+        <button 
+          onClick={() => window.location.reload()} 
+          className="mt-4 px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 transition"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  }
 
   if (loading)
     return <p className="text-gray-600 text-center mt-10">Loading results...</p>;

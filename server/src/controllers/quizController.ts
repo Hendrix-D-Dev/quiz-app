@@ -126,6 +126,13 @@ export async function getResults(req: Request, res: Response) {
 export async function getLatestResult(req: Request, res: Response) {
   try {
     const uid = (req as any).verifiedUid;
+    
+    debugLogger("getLatestResult", { 
+      uid: uid, 
+      hasUid: !!uid,
+      collection: "results" 
+    });
+
     if (!uid) return res.json(null);
 
     const snap = await db
@@ -135,11 +142,47 @@ export async function getLatestResult(req: Request, res: Response) {
       .limit(1)
       .get();
 
+    debugLogger("getLatestResult", { 
+      resultsCount: snap.size,
+      empty: snap.empty 
+    });
+
     if (snap.empty) return res.json(null);
 
     const doc = snap.docs[0];
     res.json({ id: doc.id, ...doc.data() });
   } catch (err: any) {
+    debugLogger("getLatestResult", { step: "error", error: err.message });
     res.status(500).json({ error: "Failed to fetch latest result" });
+  }
+}
+
+/** ✅ GET /api/quiz/results/:id */
+export async function getResultById(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const uid = (req as any).verifiedUid;
+    
+    if (!uid) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const doc = await db.collection("results").doc(id).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ error: "Result not found" });
+    }
+
+    const result = doc.data();
+    
+    // Ensure user can only access their own results
+    if (result?.uid !== uid) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    res.json({ id: doc.id, ...result });
+  } catch (err: any) {
+    debugLogger("quizController", { step: "getResultById-error", err });
+    res.status(500).json({ error: "Failed to fetch result" });
   }
 }
