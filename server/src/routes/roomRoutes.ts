@@ -7,12 +7,12 @@ import {
   closeRoom,
 } from "../controllers/roomController.js";
 import { verifyFirebaseTokenMiddleware } from "../middleware/authMiddleware.js";
-import { upload } from "../middleware/upload.js"; // ✅ Add upload middleware import
+import { upload } from "../middleware/upload.js";
 
 const router = Router();
 
 // Admin-only: Create room (requires auth) - now with file upload support
-router.post("/create", verifyFirebaseTokenMiddleware, upload.single("file"), createRoom); // ✅ Add upload middleware
+router.post("/create", verifyFirebaseTokenMiddleware, upload.single("file"), createRoom);
 
 // Public: Get room details (students need this to join)
 router.get("/:code", getRoom);

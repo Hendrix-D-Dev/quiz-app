@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { db } from "../config/firebaseAdmin.js";
-import type { SubmitPayload, Quiz, Result } from "../utils/types.js"; // ✅ Import Result type
+import type { SubmitPayload, Quiz, Result } from "../utils/types.js";
 import { generateQuestionsFromText } from "../services/aiService.js";
 import { debugLogger } from "../utils/debugLogger.js";
 
@@ -105,11 +105,9 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       quizTitle 
     });
 
-    
     let correct = 0;
     const total = answeredCount;
     
-   
     Object.values(answers).forEach((answer: any) => {
       if (answer.isCorrect) correct++;
     });
@@ -189,7 +187,7 @@ export async function getResults(req: Request, res: Response) {
   }
 }
 
-/** ✅ GET /api/quiz/results/latest */
+/** GET /api/quiz/results/latest */
 export async function getLatestResult(req: Request, res: Response) {
   try {
     const uid = (req as any).verifiedUid;
@@ -225,7 +223,7 @@ export async function getLatestResult(req: Request, res: Response) {
       }
 
       const doc = snap.docs[0];
-      const resultData = doc.data() as Result; // ✅ Type assertion
+      const resultData = doc.data() as Result;
       
       debugLogger("getLatestResult", { 
         step: "result-found", 
@@ -236,7 +234,6 @@ export async function getLatestResult(req: Request, res: Response) {
 
       res.json({ id: doc.id, ...resultData });
     } catch (firestoreError: any) {
-      // Handle Firestore-specific errors
       debugLogger("getLatestResult", { 
         step: "firestore-error", 
         error: firestoreError.message,
@@ -260,7 +257,7 @@ export async function getLatestResult(req: Request, res: Response) {
   }
 }
 
-/** ✅ GET /api/quiz/results/:id */
+/** GET /api/quiz/results/:id */
 export async function getResultById(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -283,10 +280,9 @@ export async function getResultById(req: Request, res: Response) {
       return res.status(404).json({ error: "Result not found" });
     }
 
-    const result = doc.data() as Result; // ✅ Type assertion
+    const result = doc.data() as Result;
     
-    // Ensure user can only access their own results
-    if (!result || result.uid !== uid) { // ✅ Check if result exists
+    if (!result || result.uid !== uid) {
       debugLogger("getResultById", { 
         step: "access-denied", 
         resultUid: result?.uid,

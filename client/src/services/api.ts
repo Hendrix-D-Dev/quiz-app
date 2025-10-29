@@ -3,15 +3,24 @@ import { getAuth, onAuthStateChanged } from "firebase/auth";
 
 const isDev = import.meta.env.MODE === "development";
 
-const baseURL =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
-  (isDev ? "http://localhost:4000" : "https://quiz-app-xgwd.onrender.com");
+// Enhanced URL detection with fallbacks
+const baseURL = (() => {
+  const envUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, "");
+  if (envUrl) return envUrl;
+  
+  if (isDev) {
+    return "http://localhost:4000";
+  } else {
+    return "https://quiz-app-xgwd.onrender.com";
+  }
+})();
 
 console.log("🌍 Using API Base URL:", baseURL);
 
 const api = axios.create({
   baseURL: `${baseURL}/api`,
   withCredentials: false,
+  timeout: 30000,
 });
 
 // 🔑 Firebase token handling
@@ -31,6 +40,29 @@ api.interceptors.request.use(async (config) => {
   }
   return config;
 });
+
+// Enhanced error interceptor
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error("🚨 API Error:", {
+      url: error.config?.url,
+      method: error.config?.method,
+      status: error.response?.status,
+      message: error.message,
+      code: error.code
+    });
+    
+    if (error.code === 'ERR_NETWORK') {
+      console.error("🌐 Network Error - Check:");
+      console.error("1. Server URL:", baseURL);
+      console.error("2. CORS configuration");
+      console.error("3. Server status");
+    }
+    
+    return Promise.reject(error);
+  }
+);
 
 // ========================================
 // 📄 CHAPTER EXTRACTION
@@ -72,7 +104,6 @@ export async function submitQuiz(
   }
 }
 
-// ✅ Add this function to fetch a specific result by ID
 export async function fetchResultById(resultId: string) {
   try {
     const user = auth.currentUser;
@@ -107,7 +138,6 @@ export async function fetchPastResults() {
   }
 }
 
-// ✅ Improved fetchLatestResult with better error handling
 export async function fetchLatestResult() {
   try {
     const user = auth.currentUser;
@@ -124,7 +154,6 @@ export async function fetchLatestResult() {
 
     return res.data || null;
   } catch (err: any) {
-    // Don't throw error if no results found, just return null
     if (err?.response?.status === 404 || err?.message?.includes("No results")) {
       console.log("ℹ️ No latest result found");
       return null;
@@ -140,13 +169,14 @@ export async function fetchLatestResult() {
 
 /**
  * Create a new room (Admin only - requires auth)
- * Now supports FormData for file upload
+ * Now supports FormData for file upload and custom room codes
  */
 export async function createRoom(data: FormData | {
   quizId: string;
   timeLimit: number; // in seconds
   questionCount: number;
   roomName?: string;
+  roomCode?: string;
 }) {
   try {
     const isFormData = data instanceof FormData;
@@ -158,10 +188,18 @@ export async function createRoom(data: FormData | {
         }
       : {};
 
+    console.log("📤 Creating room with data:", 
+      isFormData ? "FormData" : JSON.stringify(data, null, 2)
+    );
+
     const res = await api.post("/room/create", data, config);
     return res.data;
   } catch (err: any) {
-    console.error("❌ createRoom failed:", err);
+    console.error("❌ createRoom failed:", {
+      error: err.message,
+      code: err.code,
+      response: err.response?.data
+    });
     throw new Error(err?.response?.data?.error || "Failed to create room");
   }
 }
@@ -187,7 +225,7 @@ export async function submitRoomAnswers(
   data: {
     name: string;
     matric: string;
-    answers: Record<string, string>; // questionId -> answer
+    answers: Record<string, string>;
   }
 ) {
   try {

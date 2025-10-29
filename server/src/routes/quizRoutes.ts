@@ -6,7 +6,7 @@ import {
   submitGeneratedQuiz,
   getResults,
   getLatestResult,
-  getResultById, // ✅ Add this
+  getResultById,
 } from "../controllers/quizController.js";
 import { verifyFirebaseTokenMiddleware } from "./_helpers.js";
 
@@ -25,7 +25,7 @@ router.get("/results/all", verifyFirebaseTokenMiddleware, getResults);
 router.get("/results/latest", verifyFirebaseTokenMiddleware, getLatestResult);
 
 // Protected: get specific result by ID
-router.get("/results/:id", verifyFirebaseTokenMiddleware, getResultById); // ✅ Add this
+router.get("/results/:id", verifyFirebaseTokenMiddleware, getResultById);
 
 // Protected: submit saved quiz and return resultId
 router.post("/:id/submit", verifyFirebaseTokenMiddleware, submitQuiz);

@@ -8,11 +8,13 @@ const CreateRoom = () => {
   const { role } = useAuth();
   const navigate = useNavigate();
   const [roomName, setRoomName] = useState("");
+  const [roomCode, setRoomCode] = useState("");
+  const [useCustomCode, setUseCustomCode] = useState(false);
   const [timeLimit, setTimeLimit] = useState(30);
   const [questionCount, setQuestionCount] = useState(10);
   const [selectedQuizId, setSelectedQuizId] = useState("");
   const [quizzes, setQuizzes] = useState<any[]>([]);
-  const [roomCode, setRoomCode] = useState<string | null>(null);
+  const [createdRoomCode, setCreatedRoomCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -37,16 +39,13 @@ const CreateRoom = () => {
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       const file = acceptedFiles[0];
-      // Validate file type
-      if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
-        setError("Please upload a PDF file only");
+      
+      // Validate file size (25MB max - matching your upload.ts)
+      if (file.size > 25 * 1024 * 1024) {
+        setError("File size must be less than 25MB");
         return;
       }
-      // Validate file size (10MB max)
-      if (file.size > 10 * 1024 * 1024) {
-        setError("File size must be less than 10MB");
-        return;
-      }
+      
       setUploadedFile(file);
       setSelectedQuizId(""); // Clear quiz selection when file is uploaded
       setError(null);
@@ -56,7 +55,22 @@ const CreateRoom = () => {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'application/pdf': ['.pdf']
+      // Support all file types from your upload.ts middleware
+      'application/pdf': ['.pdf'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+      'application/msword': ['.doc'],
+      'text/plain': ['.txt'],
+      'text/csv': ['.csv'],
+      'text/html': ['.html', '.htm'],
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+      'application/vnd.ms-powerpoint': ['.ppt'],
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'application/vnd.ms-excel': ['.xls'],
+      'application/epub+zip': ['.epub'],
+      'image/png': ['.png'],
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/gif': ['.gif'],
+      'application/json': ['.json']
     },
     maxFiles: 1,
     multiple: false
@@ -64,6 +78,79 @@ const CreateRoom = () => {
 
   const removeFile = () => {
     setUploadedFile(null);
+  };
+
+  // Helper function to get file type icon
+  const getFileIcon = (fileName: string) => {
+    const ext = fileName.toLowerCase().split('.').pop();
+    switch (ext) {
+      case 'pdf':
+        return '📄';
+      case 'doc':
+      case 'docx':
+        return '📝';
+      case 'txt':
+        return '📃';
+      case 'csv':
+        return '📊';
+      case 'html':
+      case 'htm':
+        return '🌐';
+      case 'ppt':
+      case 'pptx':
+        return '📊';
+      case 'xls':
+      case 'xlsx':
+        return '📈';
+      case 'epub':
+        return '📚';
+      case 'png':
+      case 'jpg':
+      case 'jpeg':
+      case 'gif':
+        return '🖼️';
+      case 'json':
+        return '⚙️';
+      default:
+        return '📎';
+    }
+  };
+
+  // Helper function to get file type description
+  const getFileTypeDescription = (fileName: string) => {
+    const ext = fileName.toLowerCase().split('.').pop();
+    switch (ext) {
+      case 'pdf':
+        return 'PDF Document';
+      case 'doc':
+      case 'docx':
+        return 'Word Document';
+      case 'txt':
+        return 'Text File';
+      case 'csv':
+        return 'CSV Spreadsheet';
+      case 'html':
+      case 'htm':
+        return 'HTML File';
+      case 'ppt':
+      case 'pptx':
+        return 'PowerPoint Presentation';
+      case 'xls':
+      case 'xlsx':
+        return 'Excel Spreadsheet';
+      case 'epub':
+        return 'EPUB eBook';
+      case 'png':
+      case 'jpg':
+      case 'jpeg':
+        return 'Image File';
+      case 'gif':
+        return 'GIF Image';
+      case 'json':
+        return 'JSON Data';
+      default:
+        return 'Document';
+    }
   };
 
   if (role !== "admin") {
@@ -93,18 +180,36 @@ const CreateRoom = () => {
 
     // Validate: either file or quiz must be selected
     if (!uploadedFile && !selectedQuizId) {
-      setError("Please either upload a PDF file or select an existing quiz");
+      setError("Please either upload a document or select an existing quiz");
       setLoading(false);
       return;
     }
 
+    // Validate custom room code if used
+    if (useCustomCode && roomCode) {
+      if (roomCode.length < 4 || roomCode.length > 10) {
+        setError("Room code must be between 4 and 10 characters");
+        setLoading(false);
+        return;
+      }
+      if (!/^[A-Za-z0-9]+$/.test(roomCode)) {
+        setError("Room code can only contain letters and numbers");
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
       const formData = new FormData();
-      formData.append("timeLimit", (timeLimit * 60).toString()); // Convert to seconds
+      formData.append("timeLimit", (timeLimit * 60).toString());
       formData.append("questionCount", questionCount.toString());
       
       if (roomName) {
         formData.append("roomName", roomName);
+      }
+      
+      if (useCustomCode && roomCode) {
+        formData.append("roomCode", roomCode.toUpperCase());
       }
       
       if (uploadedFile) {
@@ -116,7 +221,7 @@ const CreateRoom = () => {
       const response = await createRoom(formData);
 
       if (response?.roomCode || response?.room?.roomCode) {
-        setRoomCode(response.roomCode || response.room.roomCode);
+        setCreatedRoomCode(response.roomCode || response.room.roomCode);
       } else {
         setError("Failed to create room. Please try again.");
       }
@@ -143,7 +248,7 @@ const CreateRoom = () => {
           <p className="text-slate-600">Set up a live quiz session for your students</p>
         </div>
 
-        {!roomCode ? (
+        {!createdRoomCode ? (
           <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-8 border border-white/20">
             <form onSubmit={handleCreate} className="space-y-6">
               {/* Room Name */}
@@ -160,10 +265,46 @@ const CreateRoom = () => {
                 />
               </div>
 
+              {/* Custom Room Code Section */}
+              <div>
+                <div className="flex items-center mb-3">
+                  <input
+                    type="checkbox"
+                    id="useCustomCode"
+                    checked={useCustomCode}
+                    onChange={(e) => setUseCustomCode(e.target.checked)}
+                    className="w-4 h-4 text-purple-600 bg-gray-100 border-gray-300 rounded focus:ring-purple-500 focus:ring-2"
+                  />
+                  <label htmlFor="useCustomCode" className="ml-2 text-sm font-medium text-slate-700">
+                    Set custom room code
+                  </label>
+                </div>
+                
+                {useCustomCode && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Custom Room Code
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Enter 4-10 character code (e.g., MATH101)"
+                      value={roomCode}
+                      onChange={(e) => setRoomCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 font-mono uppercase"
+                      maxLength={10}
+                      minLength={4}
+                    />
+                    <p className="text-xs text-slate-500 mt-2">
+                      Letters and numbers only. 4-10 characters.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               {/* File Upload Section */}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">
-                  Upload PDF Document (Optional)
+                  Upload Document (Optional)
                 </label>
                 <div
                   {...getRootProps()}
@@ -176,10 +317,11 @@ const CreateRoom = () => {
                   <input {...getInputProps()} />
                   {uploadedFile ? (
                     <div className="text-green-600">
-                      <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <p className="font-semibold">File Ready: {uploadedFile.name}</p>
+                      <div className="text-4xl mb-2">{getFileIcon(uploadedFile.name)}</div>
+                      <p className="font-semibold">{uploadedFile.name}</p>
+                      <p className="text-sm text-green-700 mt-1">
+                        {getFileTypeDescription(uploadedFile.name)} • {(uploadedFile.size / 1024 / 1024).toFixed(2)} MB
+                      </p>
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); removeFile(); }}
@@ -193,8 +335,11 @@ const CreateRoom = () => {
                       <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                       </svg>
-                      <p className="font-semibold">Drop a PDF file here, or click to browse</p>
-                      <p className="text-sm mt-1">PDF files only (max 10MB)</p>
+                      <p className="font-semibold">Drop any document here, or click to browse</p>
+                      <p className="text-sm mt-1">
+                        Supports: PDF, Word, Excel, PowerPoint, EPUB, Text, CSV, HTML, Images, JSON
+                      </p>
+                      <p className="text-xs text-slate-500 mt-2">Max 25MB</p>
                     </div>
                   )}
                 </div>
@@ -219,7 +364,7 @@ const CreateRoom = () => {
                   value={selectedQuizId}
                   onChange={(e) => {
                     setSelectedQuizId(e.target.value);
-                    setUploadedFile(null); // Clear file when quiz is selected
+                    setUploadedFile(null);
                   }}
                   disabled={isLoadingQuizzes}
                   className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 disabled:opacity-50"
@@ -278,7 +423,8 @@ const CreateRoom = () => {
                 <ul className="text-sm text-purple-700 space-y-1">
                   <li>• {questionCount} questions total</li>
                   <li>• {timeLimit} minute time limit</li>
-                  <li>• {uploadedFile ? "Quiz will be generated from uploaded PDF" : selectedQuizId ? "Using existing quiz" : "Upload PDF or select quiz"}</li>
+                  <li>• {useCustomCode && roomCode ? `Custom code: ${roomCode}` : "Auto-generated room code"}</li>
+                  <li>• {uploadedFile ? `Quiz from: ${getFileTypeDescription(uploadedFile.name)}` : selectedQuizId ? "Using existing quiz" : "Upload document or select quiz"}</li>
                   <li>• Students join with room code</li>
                   <li>• Real-time progress tracking</li>
                 </ul>
@@ -325,7 +471,7 @@ const CreateRoom = () => {
             {/* Room Code Display */}
             <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-2xl p-6 mb-6 shadow-lg">
               <div className="text-4xl font-bold text-white font-mono tracking-wider">
-                {roomCode}
+                {createdRoomCode}
               </div>
               <p className="text-emerald-100 text-sm mt-2">Room Code</p>
             </div>
@@ -333,7 +479,7 @@ const CreateRoom = () => {
             {/* Action Buttons */}
             <div className="space-y-3">
               <button
-                onClick={() => navigate(`/room/${roomCode}`)}
+                onClick={() => navigate(`/room/${createdRoomCode}`)}
                 className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all flex items-center justify-center space-x-2"
               >
                 <span>Go to Room Dashboard</span>
@@ -344,8 +490,10 @@ const CreateRoom = () => {
               
               <button
                 onClick={() => {
-                  setRoomCode(null);
+                  setCreatedRoomCode(null);
                   setRoomName("");
+                  setRoomCode("");
+                  setUseCustomCode(false);
                   setTimeLimit(30);
                   setQuestionCount(10);
                   setUploadedFile(null);

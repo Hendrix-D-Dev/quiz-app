@@ -2,22 +2,38 @@ import type { Request, Response } from "express";
 import { db } from "../config/firebaseAdmin.js";
 import type { Room, Participant, Question } from "../utils/types.js";
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
-import { parseFile } from "../services/parsers/index.js"; // Use your existing parseFile function
-import { generateQuestionsFromText } from "../services/aiService.js"; // Your existing AI service
+import { parseFile } from "../services/parsers/index.js";
+import { generateQuestionsFromText } from "../services/aiService.js";
 
 // Helper: generate random 6-letter code
 const generateRoomCode = () =>
   Math.random().toString(36).substring(2, 8).toUpperCase();
 
+// Helper: check if room code already exists
+const checkRoomCodeExists = async (code: string): Promise<boolean> => {
+  const roomDoc = await db.collection("rooms").doc(code).get();
+  return roomDoc.exists;
+};
+
 /**
  * Create a new room (Admin only - requires auth middleware)
  * Now supports both existing quizId and file upload for new quiz generation
+ * Also supports custom room codes
  */
 export const createRoom = async (req: Request, res: Response) => {
   try {
     const verifiedUid = (req as any).verifiedUid;
-    const { quizId, timeLimit, questionCount, roomName } = req.body;
+    const { quizId, timeLimit, questionCount, roomName, roomCode: customRoomCode } = req.body;
     const file = (req as any).file;
+
+    console.log("📥 Room creation request:", {
+      quizId,
+      timeLimit,
+      questionCount,
+      roomName,
+      customRoomCode,
+      hasFile: !!file
+    });
 
     // Validate required fields
     if (!timeLimit || !questionCount) {
@@ -26,6 +42,32 @@ export const createRoom = async (req: Request, res: Response) => {
 
     let finalQuizId = quizId;
     let quizQuestions: Question[] = [];
+
+    // Generate or validate room code
+    let code = customRoomCode;
+    if (code) {
+      // Validate custom room code
+      if (code.length < 4 || code.length > 10) {
+        return res.status(400).json({ error: "Room code must be between 4 and 10 characters" });
+      }
+      
+      // Check if custom code already exists
+      if (await checkRoomCodeExists(code.toUpperCase())) {
+        return res.status(400).json({ error: "Room code already exists. Please choose a different code." });
+      }
+    } else {
+      // Generate unique room code
+      let attempts = 0;
+      do {
+        code = generateRoomCode();
+        attempts++;
+        if (attempts > 10) {
+          return res.status(500).json({ error: "Failed to generate unique room code. Please try again." });
+        }
+      } while (await checkRoomCodeExists(code));
+    }
+
+    code = code.toUpperCase(); // Ensure uppercase
 
     // Case 1: File upload - generate new quiz
     if (file) {
@@ -107,7 +149,6 @@ export const createRoom = async (req: Request, res: Response) => {
       });
     }
 
-    const code = generateRoomCode();
     const room: Room = {
       code,
       quizId: finalQuizId,
@@ -122,11 +163,13 @@ export const createRoom = async (req: Request, res: Response) => {
 
     await db.collection("rooms").doc(code).set(room);
 
+    console.log(`✅ Room created successfully: ${code}`);
+
     res.json({ 
       message: "Room created successfully", 
       room: {
         ...room,
-        roomCode: code // Add roomCode for client compatibility
+        roomCode: code
       },
       roomCode: code 
     });
