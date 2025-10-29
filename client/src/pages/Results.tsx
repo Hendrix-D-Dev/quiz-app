@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { fetchPastResults, fetchLatestResult, fetchResultById } from "../services/api"; // ✅ Removed unused 'api' import
+import { fetchPastResults, fetchLatestResult, fetchResultById } from "../services/api";
 import { saveAs } from "file-saver";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 
@@ -11,6 +11,7 @@ type Result = {
   total: number;
   createdAt: number;
   user?: string;
+  displayId?: string; // Added for generated results
 };
 
 const Results = () => {
@@ -26,19 +27,25 @@ const Results = () => {
     const fetchData = async () => {
       try {
         setError(null);
+        setLoading(true);
         
         // Fetch single result by ID or latest result
         let resultData = null;
         if (id) {
+          console.log("🔍 Fetching specific result:", id);
           resultData = await fetchResultById(id);
         } else {
+          console.log("🔍 Fetching latest result");
           resultData = await fetchLatestResult();
         }
         setResult(resultData);
 
         // Fetch all past results
+        console.log("🔍 Fetching past results");
         const allResults = await fetchPastResults();
         setPastResults(allResults);
+        
+        console.log("✅ Results loaded successfully");
       } catch (err: any) {
         console.error("❌ Failed to load results:", err);
         setError(err.message || "Failed to load results");
@@ -107,7 +114,12 @@ const Results = () => {
   }
 
   if (loading)
-    return <p className="text-gray-600 text-center mt-10">Loading results...</p>;
+    return (
+      <div className="text-center text-gray-600 mt-10">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto mb-4"></div>
+        <p>Loading results...</p>
+      </div>
+    );
 
   if (!result)
     return (
@@ -160,6 +172,11 @@ const Results = () => {
             <p className="text-lg font-medium text-gray-700">
               Score: <span className="text-emerald-600 font-bold">{result.score} / {result.total}</span>
             </p>
+            {result.displayId && result.displayId.startsWith("generated-") && (
+              <p className="text-xs text-gray-500 mt-2">
+                Generated Quiz Result
+              </p>
+            )}
           </div>
         </div>
 

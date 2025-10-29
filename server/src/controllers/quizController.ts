@@ -113,6 +113,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
     });
 
     const uid = (req as any).verifiedUid || "anonymous";
+    const generatedResultId = "generated-" + Date.now();
     const score = {
       quizId: "generated",
       quizTitle,
@@ -120,21 +121,27 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       score: correct,
       total,
       createdAt: Date.now(),
+      resultId: generatedResultId, // Store the generated ID for reference
+      isGenerated: true
     };
 
-    // Save generated quiz result
+    // Save generated quiz result to Firestore for authenticated users
+    let firestoreResultId = generatedResultId;
     if (uid !== "anonymous") {
       try {
         const resultRef = await db.collection("results").add(score);
+        firestoreResultId = resultRef.id; // Use the Firestore ID for consistency
         debugLogger("quizController", { 
           step: "generated-quiz-result-saved", 
-          resultId: resultRef.id 
+          generatedId: generatedResultId,
+          firestoreId: firestoreResultId
         });
       } catch (saveErr) {
         debugLogger("quizController", { 
           step: "generated-quiz-save-failed", 
           error: saveErr 
         });
+        // Even if save fails, return the generated result
       }
     }
 
@@ -142,7 +149,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       ok: true,
       message: "Generated quiz submission received successfully.",
       score: { correct, total },
-      resultId: "generated-" + Date.now(),
+      resultId: firestoreResultId,
     });
   } catch (err) {
     debugLogger("quizController", { step: "submitGeneratedQuiz-error", err });
@@ -175,7 +182,12 @@ export async function getResults(req: Request, res: Response) {
 
     if (snap.empty) return res.json([]);
 
-    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const data = snap.docs.map((d) => ({ 
+      id: d.id, 
+      ...d.data(),
+      // For generated quizzes, use the stored resultId if available
+      displayId: d.data().resultId || d.id
+    }));
     res.json(data);
   } catch (err: any) {
     debugLogger("getResults", { 
@@ -232,7 +244,11 @@ export async function getLatestResult(req: Request, res: Response) {
         quizTitle: resultData.quizTitle
       });
 
-      res.json({ id: doc.id, ...resultData });
+      res.json({ 
+        id: doc.id, 
+        ...resultData,
+        displayId: (resultData as any).resultId || doc.id
+      });
     } catch (firestoreError: any) {
       debugLogger("getLatestResult", { 
         step: "firestore-error", 
@@ -273,6 +289,46 @@ export async function getResultById(req: Request, res: Response) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
+    // Handle generated result IDs (they start with "generated-")
+    if (id.startsWith("generated-")) {
+      debugLogger("getResultById", { 
+        step: "generated-result-requested", 
+        resultId: id 
+      });
+      
+      // For generated results, we need to find them by the resultId field
+      const snap = await db
+        .collection("results")
+        .where("uid", "==", uid)
+        .where("resultId", "==", id)
+        .limit(1)
+        .get();
+
+      if (snap.empty) {
+        debugLogger("getResultById", { 
+          step: "generated-result-not-found", 
+          resultId: id 
+        });
+        return res.status(404).json({ error: "Generated result not found. It may have expired or been cleaned up." });
+      }
+
+      const doc = snap.docs[0];
+      const result = doc.data() as Result;
+      
+      debugLogger("getResultById", { 
+        step: "generated-result-found", 
+        resultId: id,
+        firestoreId: doc.id
+      });
+
+      return res.json({ 
+        id: doc.id, 
+        ...result,
+        displayId: id // Return the original generated ID
+      });
+    }
+
+    // Handle regular Firestore document IDs
     const doc = await db.collection("results").doc(id).get();
     
     if (!doc.exists) {
@@ -282,6 +338,7 @@ export async function getResultById(req: Request, res: Response) {
 
     const result = doc.data() as Result;
     
+    // Ensure user can only access their own results
     if (!result || result.uid !== uid) {
       debugLogger("getResultById", { 
         step: "access-denied", 
@@ -297,7 +354,11 @@ export async function getResultById(req: Request, res: Response) {
       score: `${result.score}/${result.total}` 
     });
 
-    res.json({ id: doc.id, ...result });
+    res.json({ 
+      id: doc.id, 
+      ...result,
+      displayId: (result as any).resultId || doc.id
+    });
   } catch (err: any) {
     debugLogger("getResultById", { 
       step: "error", 

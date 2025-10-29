@@ -224,14 +224,30 @@ export async function fetchResultById(resultId: string) {
 
     const token = await user.getIdToken();
     
+    console.log("🔍 Fetching result with ID:", resultId);
+    
     const res = await api.get(`/quiz/results/${resultId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     return res.data;
   } catch (err: any) {
-    console.error("❌ fetchResultById failed:", err);
-    throw new Error(err?.response?.data?.error || "Failed to fetch result");
+    console.error("❌ fetchResultById failed:", {
+      resultId,
+      error: err.message,
+      status: err.response?.status
+    });
+    
+    // Provide better error messages
+    if (err.response?.status === 404) {
+      throw new Error("Result not found. It may have expired or been deleted.");
+    } else if (err.response?.status === 403) {
+      throw new Error("You don't have permission to view this result.");
+    } else if (err.response?.status === 401) {
+      throw new Error("Please sign in to view results.");
+    } else {
+      throw new Error(err?.response?.data?.error || "Failed to fetch result");
+    }
   }
 }
 
