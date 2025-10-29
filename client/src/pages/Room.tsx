@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { getRoom, submitRoomAnswers, getRoomParticipants, closeRoom } from "../services/api";
-import Navbar from "../components/Navbar";
 import type { Question, Participant } from "../utils/types";
 import { useAuth } from "../context/AuthContext";
 
@@ -50,7 +49,7 @@ const Room = () => {
     getRoom(code)
       .then((data: any) => {
         setRoomData(data);
-        setTimeLeft(data.timeLimit);
+        setTimeLeft(data.room?.timeLimit || 1800);
         setLoading(false);
       })
       .catch((err: Error) => {
@@ -70,7 +69,7 @@ const Room = () => {
     };
 
     loadParticipants();
-    const interval = setInterval(loadParticipants, 5000); // Refresh every 5s
+    const interval = setInterval(loadParticipants, 5000);
 
     return () => clearInterval(interval);
   }, [code, role]);
@@ -147,123 +146,138 @@ const Room = () => {
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
-  const getAnsweredCount = () => {
-    return Object.keys(answers).length;
-  };
+  const getAnsweredCount = () => Object.keys(answers).length;
+  const totalQuestions = roomData?.questions.length || 0;
+  const progressPercent = totalQuestions > 0 ? (getAnsweredCount() / totalQuestions) * 100 : 0;
 
   // Loading state
   if (loading) {
     return (
-      <>
-        <Navbar />
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading room...</p>
-          </div>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+          <p className="text-slate-600 font-medium">Loading room...</p>
         </div>
-      </>
+      </div>
     );
   }
 
   // Error state
   if (error || !roomData) {
     return (
-      <>
-        <Navbar />
-        <div className="flex items-center justify-center min-h-screen bg-gray-50">
-          <div className="bg-white p-8 rounded-xl shadow-md text-center max-w-md">
-            <p className="text-red-600 font-medium text-lg mb-4">
-              {error || "Room not found"}
-            </p>
-            <button
-              onClick={() => navigate("/")}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              Go Home
-            </button>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-red-50 flex items-center justify-center p-6">
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-8 text-center max-w-md border border-white/20">
+          <div className="w-16 h-16 bg-gradient-to-br from-rose-500 to-red-500 rounded-full flex items-center justify-center text-white mx-auto mb-4">
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
           </div>
+          <h3 className="text-2xl font-bold text-slate-800 mb-2">Room Not Found</h3>
+          <p className="text-slate-600 mb-6">{error || "The room code appears to be invalid"}</p>
+          <button
+            onClick={() => navigate("/")}
+            className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+          >
+            Go Home
+          </button>
         </div>
-      </>
+      </div>
     );
   }
 
   return (
-    <>
-      <Navbar />
-      <div className="min-h-screen bg-gray-50 p-6">
-        <div className="max-w-4xl mx-auto">
-          {/* Room Header */}
-          <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-3xl font-bold text-blue-700">
-                  {roomData.room.roomName || `Room ${code}`}
-                </h2>
-                <p className="text-gray-600 mt-1">
-                  Code: <span className="font-mono font-bold text-lg">{code}</span>
-                </p>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-purple-50/30">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Room Header */}
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-6 mb-6 border border-white/20">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+            <div className="flex-1">
+              <h1 className="text-3xl font-bold text-slate-800 mb-1">
+                {roomData.room.roomName || `Room ${code}`}
+              </h1>
+              <div className="flex items-center space-x-4 text-slate-600">
+                <span className="font-mono font-bold text-lg bg-slate-100 px-3 py-1 rounded-lg">
+                  {code}
+                </span>
                 {roomData.room.status === "closed" && (
-                  <span className="inline-block mt-2 px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-medium">
-                    🔒 Room Closed
+                  <span className="inline-flex items-center px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-medium">
+                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    Room Closed
                   </span>
                 )}
               </div>
-              {role === "admin" && roomData.room.status === "active" && (
-                <button
-                  onClick={handleCloseRoom}
-                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
-                >
-                  Close Room
-                </button>
-              )}
             </div>
+            {role === "admin" && roomData.room.status === "active" && (
+              <button
+                onClick={handleCloseRoom}
+                className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-rose-600 to-red-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span>Close Room</span>
+              </button>
+            )}
           </div>
+        </div>
 
-          {/* ADMIN VIEW */}
-          {role === "admin" && (
-            <div className="bg-white rounded-xl shadow-md p-6">
-              <h3 className="text-2xl font-bold mb-4 text-gray-800">
+        {/* ADMIN VIEW */}
+        {role === "admin" && (
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-6 border border-white/20">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-slate-800">
                 📊 Participants ({participants.length})
-              </h3>
+              </h2>
+              <div className="text-sm text-slate-600">
+                Auto-refreshing every 5 seconds
+              </div>
+            </div>
 
-              {participants.length === 0 ? (
-                <div className="text-center py-12">
-                  <p className="text-gray-500 text-lg">No submissions yet</p>
-                  <p className="text-gray-400 text-sm mt-2">
-                    Waiting for students to join and submit...
-                  </p>
+            {participants.length === 0 ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+                  </svg>
                 </div>
-              ) : (
+                <p className="text-slate-500 text-lg">No submissions yet</p>
+                <p className="text-slate-400 text-sm mt-2">
+                  Waiting for students to join and submit...
+                </p>
+              </div>
+            ) : (
+              <>
                 <div className="overflow-x-auto">
                   <table className="w-full">
-                    <thead className="bg-gray-50">
+                    <thead className="bg-slate-50">
                       <tr>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Name</th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Matric</th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">Score</th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">Correct</th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Submitted</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Name</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Matric</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">Score</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">Correct</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Submitted</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-200">
+                    <tbody className="divide-y divide-slate-200">
                       {participants.map((p, i) => (
-                        <tr key={p.id || i} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 text-gray-800">{p.name}</td>
-                          <td className="px-4 py-3 text-gray-600 font-mono">{p.matric}</td>
+                        <tr key={p.id || i} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-4 py-3 font-medium text-slate-800">{p.name}</td>
+                          <td className="px-4 py-3 text-slate-600 font-mono text-sm">{p.matric}</td>
                           <td className="px-4 py-3 text-center">
-                            <span className={`font-bold ${
-                              p.score >= 70 ? "text-green-600" :
-                              p.score >= 50 ? "text-yellow-600" :
-                              "text-red-600"
+                            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${
+                              p.score >= 70 ? "bg-green-100 text-green-800" :
+                              p.score >= 50 ? "bg-yellow-100 text-yellow-800" :
+                              "bg-red-100 text-red-800"
                             }`}>
                               {p.score}%
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-center text-gray-700">
+                          <td className="px-4 py-3 text-center text-slate-700 font-medium">
                             {p.correctCount}/{p.totalQuestions}
                           </td>
-                          <td className="px-4 py-3 text-gray-500 text-sm">
+                          <td className="px-4 py-3 text-slate-500 text-sm">
                             {new Date(p.submittedAt).toLocaleTimeString()}
                           </td>
                         </tr>
@@ -271,187 +285,287 @@ const Room = () => {
                     </tbody>
                   </table>
                 </div>
-              )}
 
-              <div className="mt-6 pt-6 border-t">
-                <div className="grid grid-cols-2 gap-4 text-center">
-                  <div className="bg-blue-50 rounded-lg p-4">
-                    <p className="text-sm text-gray-600">Average Score</p>
-                    <p className="text-2xl font-bold text-blue-600">
-                      {participants.length > 0
-                        ? Math.round(
-                            participants.reduce((sum, p) => sum + p.score, 0) / participants.length
-                          )
-                        : 0}%
-                    </p>
-                  </div>
-                  <div className="bg-green-50 rounded-lg p-4">
-                    <p className="text-sm text-gray-600">Pass Rate</p>
-                    <p className="text-2xl font-bold text-green-600">
-                      {participants.length > 0
-                        ? Math.round(
-                            (participants.filter((p) => p.score >= 50).length / participants.length) * 100
-                          )
-                        : 0}%
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* STUDENT VIEW */}
-          {role !== "admin" && (
-            <>
-              {/* Result View */}
-              {submitted && result && (
-                <div className="bg-white rounded-xl shadow-md p-8 text-center">
-                  <div className="mb-6">
-                    <div className={`w-32 h-32 rounded-full mx-auto flex items-center justify-center ${
-                      result.score >= 70 ? "bg-green-100" :
-                      result.score >= 50 ? "bg-yellow-100" :
-                      "bg-red-100"
-                    }`}>
-                      <span className={`text-4xl font-bold ${
-                        result.score >= 70 ? "text-green-600" :
-                        result.score >= 50 ? "text-yellow-600" :
-                        "text-red-600"
-                      }`}>
-                        {result.score}%
-                      </span>
+                {/* Statistics */}
+                <div className="mt-6 pt-6 border-t border-slate-200">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-xl p-4 text-center">
+                      <p className="text-sm text-slate-600">Participants</p>
+                      <p className="text-2xl font-bold text-blue-600">{participants.length}</p>
+                    </div>
+                    <div className="bg-gradient-to-r from-emerald-50 to-green-50 rounded-xl p-4 text-center">
+                      <p className="text-sm text-slate-600">Average Score</p>
+                      <p className="text-2xl font-bold text-emerald-600">
+                        {participants.length > 0
+                          ? Math.round(participants.reduce((sum, p) => sum + p.score, 0) / participants.length)
+                          : 0}%
+                      </p>
+                    </div>
+                    <div className="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-xl p-4 text-center">
+                      <p className="text-sm text-slate-600">Pass Rate</p>
+                      <p className="text-2xl font-bold text-amber-600">
+                        {participants.length > 0
+                          ? Math.round((participants.filter((p) => p.score >= 50).length / participants.length) * 100)
+                          : 0}%
+                      </p>
+                    </div>
+                    <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-4 text-center">
+                      <p className="text-sm text-slate-600">High Scores</p>
+                      <p className="text-2xl font-bold text-purple-600">
+                        {participants.filter((p) => p.score >= 80).length}
+                      </p>
                     </div>
                   </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
-                  <h3 className="text-2xl font-bold text-gray-800 mb-2">
-                    Quiz Submitted!
-                  </h3>
-                  <p className="text-gray-600 mb-6">
-                    You got {result.correctCount} out of {result.totalQuestions} correct
-                  </p>
+        {/* STUDENT VIEW */}
+        {role !== "admin" && (
+          <>
+            {/* Result View */}
+            {submitted && result && (
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-8 text-center border border-white/20 animate-fade-in">
+                <div className="mb-6">
+                  <div className={`w-32 h-32 rounded-full mx-auto flex items-center justify-center ${
+                    result.score >= 70 ? "bg-gradient-to-br from-emerald-400 to-green-500" :
+                    result.score >= 50 ? "bg-gradient-to-br from-amber-400 to-yellow-500" :
+                    "bg-gradient-to-br from-rose-400 to-red-500"
+                  } shadow-lg`}>
+                    <span className="text-3xl font-bold text-white">
+                      {result.score}%
+                    </span>
+                  </div>
+                </div>
 
+                <h3 className="text-2xl font-bold text-slate-800 mb-2">
+                  Quiz Completed! {result.score >= 70 ? "🎉" : result.score >= 50 ? "👍" : "📚"}
+                </h3>
+                <p className="text-slate-600 mb-2">
+                  You answered {result.correctCount} out of {result.totalQuestions} questions correctly
+                </p>
+                <p className={`text-lg font-semibold mb-6 ${
+                  result.score >= 70 ? "text-emerald-600" :
+                  result.score >= 50 ? "text-amber-600" :
+                  "text-rose-600"
+                }`}>
+                  {result.score >= 70 ? "Excellent work!" : 
+                   result.score >= 50 ? "Good job!" : 
+                   "Keep practicing!"}
+                </p>
+
+                <div className="flex flex-col sm:flex-row gap-3 justify-center">
                   <button
-                    onClick={() => navigate("/")}
-                    className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                    onClick={() => navigate("/quiz")}
+                    className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
                   >
-                    Go Home
+                    Take Another Quiz
+                  </button>
+                  <button
+                    onClick={() => navigate("/results")}
+                    className="px-6 py-3 bg-slate-100 text-slate-700 rounded-xl font-semibold hover:bg-slate-200 transition-all"
+                  >
+                    View All Results
                   </button>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Pre-Start View */}
-              {!started && !submitted && (
-                <div className="bg-white rounded-xl shadow-md p-8">
-                  <h3 className="text-xl font-bold mb-6 text-gray-800 text-center">
-                    Enter Your Details to Start
+            {/* Pre-Start View */}
+            {!started && !submitted && (
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-8 border border-white/20">
+                <div className="text-center mb-6">
+                  <h3 className="text-2xl font-bold text-slate-800 mb-2">
+                    Enter Your Details
                   </h3>
-                  <div className="space-y-4 max-w-md mx-auto">
+                  <p className="text-slate-600">Get ready to start the quiz</p>
+                </div>
+                
+                <div className="space-y-6 max-w-md mx-auto">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Full Name
+                    </label>
                     <input
                       type="text"
-                      placeholder="Full Name"
+                      placeholder="Enter your full name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      className="w-full border border-gray-300 px-4 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                     />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Matric Number
+                    </label>
                     <input
                       type="text"
-                      placeholder="Matric Number"
+                      placeholder="Enter your matric number"
                       value={matric}
                       onChange={(e) => setMatric(e.target.value)}
-                      className="w-full border border-gray-300 px-4 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                     />
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
-                      <p className="font-semibold">Quiz Information:</p>
-                      <ul className="mt-2 space-y-1">
-                        <li>• {roomData.room.questionCount} questions</li>
-                        <li>• {Math.floor(roomData.room.timeLimit / 60)} minutes time limit</li>
-                        <li>• Auto-submit when time runs out</li>
-                      </ul>
+                  </div>
+
+                  {/* Quiz Info Card */}
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-200">
+                    <h4 className="font-semibold text-blue-800 mb-3 flex items-center">
+                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Quiz Information
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3 text-sm text-blue-700">
+                      <div className="flex items-center">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full mr-2"></div>
+                        {roomData.room.questionCount} questions
+                      </div>
+                      <div className="flex items-center">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full mr-2"></div>
+                        {Math.floor(roomData.room.timeLimit / 60)} minutes
+                      </div>
+                      <div className="flex items-center">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full mr-2"></div>
+                        Auto-submit enabled
+                      </div>
+                      <div className="flex items-center">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full mr-2"></div>
+                        Instant results
+                      </div>
                     </div>
-                    <button
-                      onClick={() => setStarted(true)}
-                      disabled={!name.trim() || !matric.trim()}
-                      className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Start Quiz
-                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setStarted(true)}
+                    disabled={!name.trim() || !matric.trim()}
+                    className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
+                  >
+                    Start Quiz
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Quiz View */}
+            {started && !submitted && (
+              <div className="space-y-6">
+                {/* Timer & Progress Header */}
+                <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-6 border border-white/20">
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between text-sm text-slate-600 mb-2">
+                        <span>Progress</span>
+                        <span>{getAnsweredCount()}/{totalQuestions} answered</span>
+                      </div>
+                      <div className="w-full bg-slate-200 h-3 rounded-full overflow-hidden">
+                        <div
+                          className="h-3 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-500 ease-out"
+                          style={{ width: `${progressPercent}%` }}
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="text-center sm:text-right">
+                      <div className="text-sm text-slate-600 mb-1">Time Remaining</div>
+                      <div className={`text-2xl font-bold font-mono ${
+                        timeLeft && timeLeft < 60 ? "text-rose-600 animate-pulse" : "text-slate-800"
+                      }`}>
+                        {timeLeft !== null ? formatTime(timeLeft) : "--:--"}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              )}
 
-              {/* Quiz View */}
-              {started && !submitted && (
-                <div className="space-y-6">
-                  {/* Timer & Progress */}
-                  <div className="bg-white rounded-xl shadow-md p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm text-gray-600">Progress</p>
-                        <p className="text-lg font-bold text-gray-800">
-                          {getAnsweredCount()} / {roomData.questions.length} answered
-                        </p>
+                {/* Questions */}
+                {roomData.questions.map((q, idx) => (
+                  <div
+                    key={q.id}
+                    className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-6 border border-white/20"
+                  >
+                    <div className="flex items-start space-x-4 mb-4">
+                      <div className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl flex items-center justify-center text-white font-bold text-lg shadow-lg">
+                        {idx + 1}
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm text-gray-600">Time Remaining</p>
-                        <p className={`text-2xl font-bold ${
-                          timeLeft && timeLeft < 60 ? "text-red-600" : "text-blue-600"
-                        }`}>
-                          {timeLeft !== null ? formatTime(timeLeft) : "--:--"}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Questions */}
-                  {roomData.questions.map((q, idx) => (
-                    <div
-                      key={q.id}
-                      className="bg-white rounded-xl shadow-md p-6 space-y-3"
-                    >
-                      <p className="font-bold text-gray-800 text-lg">
-                        {idx + 1}. {q.question}
+                      <p className="text-lg font-semibold text-slate-800 leading-relaxed">
+                        {q.question}
                       </p>
-                      <div className="space-y-2">
-                        {q.options.map((opt) => (
+                    </div>
+                    
+                    <div className="space-y-3">
+                      {q.options.map((opt, optIdx) => {
+                        const isSelected = answers[q.id] === opt;
+                        const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+                        
+                        return (
                           <label
                             key={opt}
-                            className={`block border-2 p-3 rounded-lg cursor-pointer transition ${
-                              answers[q.id] === opt
-                                ? "border-blue-500 bg-blue-50"
-                                : "border-gray-200 hover:bg-gray-50"
+                            className={`flex items-center space-x-4 p-4 rounded-xl cursor-pointer border-2 transition-all duration-200 ${
+                              isSelected
+                                ? "border-blue-500 bg-gradient-to-r from-blue-50 to-indigo-50 shadow-lg scale-105"
+                                : "border-slate-200 hover:border-blue-300 hover:bg-slate-50 hover:shadow-md"
                             }`}
                           >
+                            <div className={`flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center font-bold transition-all ${
+                              isSelected
+                                ? "bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-lg"
+                                : "bg-slate-100 text-slate-600"
+                            }`}>
+                              {letters[optIdx]}
+                            </div>
                             <input
                               type="radio"
                               name={q.id}
                               value={opt}
-                              checked={answers[q.id] === opt}
+                              checked={isSelected}
                               onChange={() => handleAnswer(q.id, opt)}
-                              className="mr-3"
+                              className="sr-only"
                             />
-                            <span className="text-gray-800">{opt}</span>
+                            <span className={`flex-1 font-medium ${isSelected ? "text-blue-900" : "text-slate-700"}`}>
+                              {opt}
+                            </span>
+                            {isSelected && (
+                              <svg className="w-6 h-6 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
                           </label>
-                        ))}
-                      </div>
+                        );
+                      })}
                     </div>
-                  ))}
-
-                  {/* Submit Button */}
-                  <div className="sticky bottom-4">
-                    <button
-                      onClick={handleSubmit}
-                      disabled={submitting}
-                      className="w-full bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 transition font-bold text-lg shadow-lg disabled:opacity-50"
-                    >
-                      {submitting ? "Submitting..." : "Submit Quiz"}
-                    </button>
                   </div>
+                ))}
+
+                {/* Submit Button */}
+                <div className="sticky bottom-6">
+                  <button
+                    onClick={handleSubmit}
+                    disabled={submitting}
+                    className="w-full py-4 bg-gradient-to-r from-emerald-600 to-green-600 text-white rounded-xl font-bold text-lg shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100 flex items-center justify-center space-x-2"
+                  >
+                    {submitting ? (
+                      <>
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                        <span>Submitting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Submit Quiz</span>
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </>
+                    )}
+                  </button>
                 </div>
-              )}
-            </>
-          )}
-        </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
-    </>
+    </div>
   );
 };
 

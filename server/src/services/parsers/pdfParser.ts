@@ -1,31 +1,34 @@
 import { debugLogger } from "../../utils/debugLogger.js";
 
 /**
- * ✅ Simplified & Reliable PDF Parser
- * 1️⃣ Primary: pdf-parse (most reliable for text-based PDFs)
- * 2️⃣ Fallback: pdf-lib + enhanced regex extraction
- * 3️⃣ Final fallback: binary text cleanup
+ * ✅ Improved PDF Parser with Better Text Extraction
+ * 1️⃣ Primary: pdf-parse with better error handling
+ * 2️⃣ Fallback: Manual text extraction from PDF streams
+ * 3️⃣ Final: Clean binary extraction
  */
 export async function parsePdf(buffer: Buffer): Promise<string> {
-  // --- Primary parser: pdf-parse ---
+  // --- Primary parser: pdf-parse with improved handling ---
   try {
-    const mod = await import("pdf-parse");
-    const pdfParse = mod.default || mod;
-
-    if (typeof pdfParse !== "function") throw new Error("Invalid pdf-parse import");
-
-    const data = await pdfParse(buffer);
-    const text = (data.text || "").replace(/\s+/g, " ").trim();
-
-    if (text.length >= 100) {
+    const pdfParse = await import("pdf-parse");
+    const pdfParseFn = pdfParse.default || pdfParse;
+    
+    // ✅ FIXED: pdf-parse only takes one argument
+    const data = await pdfParseFn(buffer);
+    
+    let text = (data.text || "").trim();
+    
+    // Clean up the text
+    text = cleanExtractedText(text);
+    
+    if (text.length >= 200) { // Increased minimum threshold
       debugLogger("pdfParser", {
         step: "pdf-parse success",
         length: text.length,
-        preview: text.slice(0, 120),
+        preview: text.slice(0, 150),
       });
       return text;
     }
-    throw new Error("Parsed text too short");
+    throw new Error(`Parsed text too short: ${text.length} chars`);
   } catch (err) {
     debugLogger("pdfParser", { 
       step: "pdf-parse failed", 
@@ -33,134 +36,117 @@ export async function parsePdf(buffer: Buffer): Promise<string> {
     });
   }
 
-  // --- Enhanced Fallback: pdf-lib with comprehensive text extraction ---
+  // --- Improved manual extraction ---
   try {
-    const { PDFDocument } = await import("pdf-lib");
-    const pdfDoc = await PDFDocument.load(buffer);
-
-    // Convert to string and use multiple extraction strategies
-    const raw = buffer.toString("binary");
+    const manualText = await extractTextManually(buffer);
+    const cleanText = cleanExtractedText(manualText);
     
-    // Multiple regex patterns for different PDF text encodings
-    const textPatterns = [
-      /\(([^)]+)\)\s*TJ?/g,                    // Standard text in parentheses (TJ operator)
-      /<([^>]+)>\s*TJ?/g,                      // Hex encoded text
-      /\/[A-Za-z]+\s*\(([^)]+)\)/g,            // Text after font declarations
-      /\(([^)]+)\)\s*Tj/g,                     // Simple text show operator (Tj)
-      /\[[^\]]*\(([^)]+)\)[^\]]*\]\s*TJ/g,     // Array text in brackets
-      /(\\[0-9]{3}|[A-Za-z0-9\s.,!?;:])+/g,   // Escaped character sequences
-    ];
-
-    let extracted = "";
-    
-    for (const pattern of textPatterns) {
-      const matches = raw.match(pattern) || [];
-      const textFromPattern = matches
-        .map((m) => {
-          // Clean the matched text
-          return m
-            .replace(/\(|\)|<|>|TJ|Tj|Td|Tf|TD|Tm|Tc|Tw|Tz|Ts|Tr|T\*|\[|\]|\\[0-9]{3}|\/[A-Za-z]+\s*/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-        })
-        .filter(text => text.length > 1) // Remove single characters/noise
-        .join(" ");
-      
-      if (textFromPattern.length > extracted.length) {
-        extracted = textFromPattern;
-      }
-    }
-
-    // Additional: Try to extract from stream objects
-    const streamMatches = raw.match(/stream[\s\S]*?endstream/g) || [];
-    for (const stream of streamMatches) {
-      const cleanStream = stream
-        .replace(/stream|endstream/g, "")
-        .replace(/[^\x20-\x7E\n\r]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-      
-      if (cleanStream.length > 50 && cleanStream.length > extracted.length) {
-        extracted = cleanStream;
-      }
-    }
-
-    if (extracted.length > 100) {
+    if (cleanText.length >= 100) {
       debugLogger("pdfParser", {
-        step: "pdf-lib fallback success",
-        length: extracted.length,
-        preview: extracted.slice(0, 120),
+        step: "manual extraction success",
+        length: cleanText.length,
+        preview: cleanText.slice(0, 150),
       });
-      return extracted;
-    } else {
-      throw new Error("pdf-lib fallback yielded too little text");
+      return cleanText;
     }
+    throw new Error("Manual extraction yielded too little text");
   } catch (err) {
     debugLogger("pdfParser", {
-      step: "pdf-lib fallback failed",
+      step: "manual extraction failed",
       error: String(err),
     });
   }
 
-  // --- Final fallback: comprehensive binary text extraction ---
-  try {
-    // Try multiple encodings
-    const encodings = ['utf8', 'latin1', 'ascii', 'binary'] as const;
-    let bestText = "";
-    
-    for (const encoding of encodings) {
-      try {
-        const text = buffer.toString(encoding)
-          .replace(/[^\x20-\x7E\n\r\t]/g, " ") // Remove non-printable chars
-          .replace(/\s+/g, " ")
-          .trim();
-        
-        // Keep the longest extracted text
-        if (text.length > bestText.length) {
-          bestText = text;
-        }
-      } catch (e) {
-        // Continue with next encoding
-      }
-    }
-
-    if (bestText.length > 50) {
-      debugLogger("pdfParser", {
-        step: "binary fallback success",
-        length: bestText.length,
-        encoding: "multiple",
-        preview: bestText.slice(0, 120),
-      });
-      return bestText;
-    }
-  } catch (err) {
-    debugLogger("pdfParser", {
-      step: "binary fallback failed",
-      error: String(err),
-    });
-  }
-
-  // --- Ultimate fallback: minimal text cleanup ---
-  const minimalText = buffer.toString('utf8')
-    .replace(/[^A-Za-z0-9\s.,!?;:()-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
+  // --- Final fallback: smart binary cleanup ---
+  const fallbackText = extractTextFromBinary(buffer);
+  const cleanFallback = cleanExtractedText(fallbackText);
+  
   debugLogger("pdfParser", {
-    step: "minimal fallback",
-    length: minimalText.length,
-    preview: minimalText.slice(0, 120),
+    step: "binary fallback",
+    length: cleanFallback.length,
+    preview: cleanFallback.slice(0, 150),
   });
 
-  if (minimalText.length < 50) {
-    debugLogger("pdfParser", {
-      step: "pdf-may-be-scanned-or-protected",
-      warning: "PDF appears to be image-based, scanned, or protected. Text extraction yielded very little content.",
-      extractedLength: minimalText.length
-    });
-    
-    return "This PDF appears to be image-based or scanned. The system extracted very little text. For better results, use text-based PDFs or enable OCR features.";
+  if (cleanFallback.length < 100) {
+    return "This PDF appears to be image-based or scanned. The system could not extract readable text. Please use text-based PDFs for best results.";
   }
 
-  return minimalText;
+  return cleanFallback;
+}
+
+/** Manual text extraction from PDF buffer */
+async function extractTextManually(buffer: Buffer): Promise<string> {
+  try {
+    const pdfString = buffer.toString('binary');
+    
+    // Look for text in parentheses (most common PDF text format)
+    const textInParens = (pdfString.match(/\(([^)]+)\)/g) || [])
+      .map(match => match.slice(1, -1)) // Remove parentheses
+      .join(' ');
+    
+    // Look for hex encoded text
+    const hexText = (pdfString.match(/<([0-9A-Fa-f]+)>/g) || [])
+      .map(match => {
+        const hex = match.slice(1, -1);
+        try {
+          return Buffer.from(hex, 'hex').toString('utf8');
+        } catch {
+          return '';
+        }
+      })
+      .join(' ');
+    
+    // Look for stream content (between stream and endstream)
+    const streamText = (pdfString.match(/stream[\s\S]*?endstream/g) || [])
+      .map(stream => {
+        return stream
+          .replace(/stream|endstream/g, '')
+          .replace(/[^\x20-\x7E\n\r]/g, ' ') // Remove non-printable
+          .replace(/\s+/g, ' ')
+          .trim();
+      })
+      .join(' ');
+    
+    return [textInParens, hexText, streamText]
+      .filter(text => text.length > 10) // Only keep substantial chunks
+      .join(' ')
+      .substring(0, 10000); // Limit length
+  } catch (err) {
+    return '';
+  }
+}
+
+/** Extract and clean text from binary buffer */
+function extractTextFromBinary(buffer: Buffer): string {
+  // Try multiple encodings
+  const encodings = ['utf8', 'latin1', 'ascii'] as const;
+  let bestText = '';
+  
+  for (const encoding of encodings) {
+    try {
+      const text = buffer.toString(encoding);
+      if (text.length > bestText.length) {
+        bestText = text;
+      }
+    } catch (e) {
+      // Continue with next encoding
+    }
+  }
+  
+  return bestText;
+}
+
+/** Clean extracted text by removing garbage */
+function cleanExtractedText(text: string): string {
+  return text
+    // Remove common PDF artifacts
+    .replace(/\/[A-Za-z]+\s*/g, ' ') // Remove font names like /F1, /Helvetica
+    .replace(/\[[^\]]*\]/g, ' ') // Remove array notations
+    .replace(/BT|ET|Tm|Td|Tj|TJ|Tf|TD/g, ' ') // Remove PDF operators
+    .replace(/\\[0-9]{3}/g, ' ') // Remove octal escapes
+    .replace(/endobj|endstream|stream|obj/g, ' ') // Remove PDF structure
+    // Clean up whitespace and special characters
+    .replace(/[^\x20-\x7E\n\r]/g, ' ') // Remove non-printable chars
+    .replace(/\s+/g, ' ') // Normalize whitespace
+    .trim();
 }
