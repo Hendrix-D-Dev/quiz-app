@@ -140,15 +140,25 @@ export async function fetchLatestResult() {
 
 /**
  * Create a new room (Admin only - requires auth)
+ * Now supports FormData for file upload
  */
-export async function createRoom(data: {
+export async function createRoom(data: FormData | {
   quizId: string;
   timeLimit: number; // in seconds
   questionCount: number;
   roomName?: string;
 }) {
   try {
-    const res = await api.post("/room/create", data);
+    const isFormData = data instanceof FormData;
+    const config = isFormData 
+      ? { 
+          headers: { 
+            "Content-Type": "multipart/form-data",
+          } 
+        }
+      : {};
+
+    const res = await api.post("/room/create", data, config);
     return res.data;
   } catch (err: any) {
     console.error("❌ createRoom failed:", err);

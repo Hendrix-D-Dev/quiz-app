@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { db } from "../config/firebaseAdmin.js";
 import type { Room, Participant, Question } from "../utils/types.js";
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
+import { parseFile } from "../services/parsers/index.js"; // Use your existing parseFile function
+import { generateQuestionsFromText } from "../services/aiService.js"; // Your existing AI service
 
 // Helper: generate random 6-letter code
 const generateRoomCode = () =>
@@ -9,37 +11,106 @@ const generateRoomCode = () =>
 
 /**
  * Create a new room (Admin only - requires auth middleware)
+ * Now supports both existing quizId and file upload for new quiz generation
  */
 export const createRoom = async (req: Request, res: Response) => {
   try {
     const verifiedUid = (req as any).verifiedUid;
     const { quizId, timeLimit, questionCount, roomName } = req.body;
+    const file = (req as any).file;
 
     // Validate required fields
-    if (!quizId || !timeLimit || !questionCount) {
-      return res.status(400).json({ error: "Missing required fields" });
+    if (!timeLimit || !questionCount) {
+      return res.status(400).json({ error: "Missing required fields: timeLimit and questionCount are required" });
     }
 
-    // Verify the quiz exists
-    const quizDoc = await db.collection("quizzes").doc(quizId).get();
-    if (!quizDoc.exists) {
-      return res.status(404).json({ error: "Quiz not found" });
+    let finalQuizId = quizId;
+    let quizQuestions: Question[] = [];
+
+    // Case 1: File upload - generate new quiz
+    if (file) {
+      try {
+        console.log(`Processing uploaded file: ${file.originalname}`);
+        
+        // Extract text from the uploaded file using your existing parser system
+        const text = await parseFile(file.buffer, file.originalname);
+        
+        if (!text || text.trim().length === 0) {
+          return res.status(400).json({ 
+            error: "Could not extract text from the uploaded document" 
+          });
+        }
+
+        console.log(`Successfully extracted text (${text.length} chars), generating quiz...`);
+
+        // Generate quiz using your existing AI service
+        const questions = await generateQuestionsFromText(text, parseInt(questionCount), "medium");
+        
+        if (!questions || questions.length === 0) {
+          return res.status(400).json({ 
+            error: "Failed to generate questions from the uploaded document" 
+          });
+        }
+
+        console.log(`Generated ${questions.length} questions, creating quiz document...`);
+
+        // Create quiz document in Firestore
+        const quizData = {
+          title: roomName || `Quiz from ${file.originalname}`,
+          description: `Automatically generated from ${file.originalname}`,
+          questions: questions,
+          createdBy: verifiedUid,
+          createdAt: Date.now(),
+          sourceFile: file.originalname,
+        };
+
+        const docRef = await db.collection("quizzes").add(quizData);
+        finalQuizId = docRef.id;
+
+        // Update with ID
+        await docRef.update({
+          id: finalQuizId,
+        });
+
+        quizQuestions = questions;
+        console.log(`Quiz created successfully with ID: ${finalQuizId}`);
+
+      } catch (err: any) {
+        console.error("Error generating quiz from document:", err);
+        return res.status(400).json({ 
+          error: `Failed to process uploaded document: ${err.message}` 
+        });
+      }
     }
+    // Case 2: Use existing quizId
+    else if (quizId) {
+      const quizDoc = await db.collection("quizzes").doc(quizId).get();
+      if (!quizDoc.exists) {
+        return res.status(404).json({ error: "Quiz not found" });
+      }
 
-    const quiz = quizDoc.data();
-    const availableQuestions = quiz?.questions?.length || 0;
+      const quiz = quizDoc.data();
+      quizQuestions = quiz?.questions || [];
+      const availableQuestions = quizQuestions.length;
 
-    // Validate question count
-    if (questionCount > availableQuestions) {
-      return res.status(400).json({
-        error: `Quiz only has ${availableQuestions} questions, cannot create room with ${questionCount}`,
+      // Validate question count
+      if (parseInt(questionCount) > availableQuestions) {
+        return res.status(400).json({
+          error: `Quiz only has ${availableQuestions} questions, cannot create room with ${questionCount}`,
+        });
+      }
+    }
+    // Case 3: No file and no quizId
+    else {
+      return res.status(400).json({ 
+        error: "Either quizId or file upload is required to create a room" 
       });
     }
 
     const code = generateRoomCode();
     const room: Room = {
       code,
-      quizId,
+      quizId: finalQuizId,
       createdBy: verifiedUid,
       timeLimit: Number(timeLimit), // in seconds
       questionCount: Number(questionCount),
@@ -51,7 +122,14 @@ export const createRoom = async (req: Request, res: Response) => {
 
     await db.collection("rooms").doc(code).set(room);
 
-    res.json({ message: "Room created successfully", room });
+    res.json({ 
+      message: "Room created successfully", 
+      room: {
+        ...room,
+        roomCode: code // Add roomCode for client compatibility
+      },
+      roomCode: code 
+    });
   } catch (err) {
     console.error("Error creating room:", err);
     res.status(500).json({ error: "Failed to create room" });

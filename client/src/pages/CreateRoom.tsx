@@ -1,17 +1,70 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
-import { createRoom } from "../services/api";
+import { createRoom, fetchAllQuizzes } from "../services/api";
 import { useNavigate } from "react-router-dom";
+import { useDropzone } from "react-dropzone";
 
 const CreateRoom = () => {
-  const { role } = useAuth(); // ✅ Removed unused 'user' variable
+  const { role } = useAuth();
   const navigate = useNavigate();
   const [roomName, setRoomName] = useState("");
   const [timeLimit, setTimeLimit] = useState(30);
   const [questionCount, setQuestionCount] = useState(10);
+  const [selectedQuizId, setSelectedQuizId] = useState("");
+  const [quizzes, setQuizzes] = useState<any[]>([]);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [isLoadingQuizzes, setIsLoadingQuizzes] = useState(false);
+
+  // Load quizzes on component mount
+  useState(() => {
+    const loadQuizzes = async () => {
+      setIsLoadingQuizzes(true);
+      try {
+        const quizzesData = await fetchAllQuizzes();
+        setQuizzes(quizzesData);
+      } catch (err) {
+        console.error("Failed to load quizzes:", err);
+      } finally {
+        setIsLoadingQuizzes(false);
+      }
+    };
+    loadQuizzes();
+  });
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles && acceptedFiles.length > 0) {
+      const file = acceptedFiles[0];
+      // Validate file type
+      if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
+        setError("Please upload a PDF file only");
+        return;
+      }
+      // Validate file size (10MB max)
+      if (file.size > 10 * 1024 * 1024) {
+        setError("File size must be less than 10MB");
+        return;
+      }
+      setUploadedFile(file);
+      setSelectedQuizId(""); // Clear quiz selection when file is uploaded
+      setError(null);
+    }
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'application/pdf': ['.pdf']
+    },
+    maxFiles: 1,
+    multiple: false
+  });
+
+  const removeFile = () => {
+    setUploadedFile(null);
+  };
 
   if (role !== "admin") {
     return (
@@ -38,16 +91,32 @@ const CreateRoom = () => {
     setLoading(true);
     setError(null);
 
-    try {
-      const response = await createRoom({
-        quizId: "generated", // You might want to select from existing quizzes
-        timeLimit: timeLimit * 60, // Convert to seconds
-        questionCount,
-        roomName: roomName || undefined,
-      });
+    // Validate: either file or quiz must be selected
+    if (!uploadedFile && !selectedQuizId) {
+      setError("Please either upload a PDF file or select an existing quiz");
+      setLoading(false);
+      return;
+    }
 
-      if (response?.roomCode) {
-        setRoomCode(response.roomCode);
+    try {
+      const formData = new FormData();
+      formData.append("timeLimit", (timeLimit * 60).toString()); // Convert to seconds
+      formData.append("questionCount", questionCount.toString());
+      
+      if (roomName) {
+        formData.append("roomName", roomName);
+      }
+      
+      if (uploadedFile) {
+        formData.append("file", uploadedFile);
+      } else if (selectedQuizId) {
+        formData.append("quizId", selectedQuizId);
+      }
+
+      const response = await createRoom(formData);
+
+      if (response?.roomCode || response?.room?.roomCode) {
+        setRoomCode(response.roomCode || response.room.roomCode);
       } else {
         setError("Failed to create room. Please try again.");
       }
@@ -64,7 +133,7 @@ const CreateRoom = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/30 to-purple-50/30 flex items-center justify-center p-6">
-      <div className="w-full max-w-md">
+      <div className="w-full max-w-2xl">
         {/* Header */}
         <div className="text-center mb-8">
           <div className="w-20 h-20 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl flex items-center justify-center text-2xl text-white shadow-lg mx-auto mb-4">
@@ -89,6 +158,82 @@ const CreateRoom = () => {
                   onChange={(e) => setRoomName(e.target.value)}
                   className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200"
                 />
+              </div>
+
+              {/* File Upload Section */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Upload PDF Document (Optional)
+                </label>
+                <div
+                  {...getRootProps()}
+                  className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200 ${
+                    isDragActive
+                      ? "border-purple-500 bg-purple-50"
+                      : "border-slate-300 hover:border-purple-400 hover:bg-slate-50"
+                  } ${uploadedFile ? "border-green-500 bg-green-50" : ""}`}
+                >
+                  <input {...getInputProps()} />
+                  {uploadedFile ? (
+                    <div className="text-green-600">
+                      <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <p className="font-semibold">File Ready: {uploadedFile.name}</p>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); removeFile(); }}
+                        className="mt-2 text-sm text-red-600 hover:text-red-700"
+                      >
+                        Remove File
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-slate-600">
+                      <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                      <p className="font-semibold">Drop a PDF file here, or click to browse</p>
+                      <p className="text-sm mt-1">PDF files only (max 10MB)</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-slate-300"></div>
+                </div>
+                <div className="relative flex justify-center text-sm">
+                  <span className="px-2 bg-white text-slate-500">OR</span>
+                </div>
+              </div>
+
+              {/* Existing Quiz Selection */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Select Existing Quiz (Optional)
+                </label>
+                <select
+                  value={selectedQuizId}
+                  onChange={(e) => {
+                    setSelectedQuizId(e.target.value);
+                    setUploadedFile(null); // Clear file when quiz is selected
+                  }}
+                  disabled={isLoadingQuizzes}
+                  className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 disabled:opacity-50"
+                >
+                  <option value="">Choose an existing quiz...</option>
+                  {quizzes.map((quiz) => (
+                    <option key={quiz.id} value={quiz.id}>
+                      {quiz.title} ({quiz.questions?.length || 0} questions)
+                    </option>
+                  ))}
+                </select>
+                {isLoadingQuizzes && (
+                  <p className="text-sm text-slate-500 mt-1">Loading quizzes...</p>
+                )}
               </div>
 
               {/* Time Limit */}
@@ -133,6 +278,7 @@ const CreateRoom = () => {
                 <ul className="text-sm text-purple-700 space-y-1">
                   <li>• {questionCount} questions total</li>
                   <li>• {timeLimit} minute time limit</li>
+                  <li>• {uploadedFile ? "Quiz will be generated from uploaded PDF" : selectedQuizId ? "Using existing quiz" : "Upload PDF or select quiz"}</li>
                   <li>• Students join with room code</li>
                   <li>• Real-time progress tracking</li>
                 </ul>
@@ -141,7 +287,7 @@ const CreateRoom = () => {
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || (!uploadedFile && !selectedQuizId)}
                 className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100 flex items-center justify-center space-x-2"
               >
                 {loading ? (
@@ -202,6 +348,8 @@ const CreateRoom = () => {
                   setRoomName("");
                   setTimeLimit(30);
                   setQuestionCount(10);
+                  setUploadedFile(null);
+                  setSelectedQuizId("");
                 }}
                 className="w-full py-3 bg-slate-100 text-slate-700 rounded-xl font-semibold hover:bg-slate-200 transition-all"
               >
