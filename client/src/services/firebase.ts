@@ -1,4 +1,3 @@
-// src/services/firebase.ts
 import { initializeApp } from "firebase/app";
 import { getAuth, setPersistence, browserLocalPersistence } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
@@ -22,7 +21,7 @@ export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 
-// ✅ Keep user logged in across refreshes
+// ✅ Keep user logged in across refreshes with enhanced error handling
 setPersistence(auth, browserLocalPersistence)
   .then(() => console.log("🔒 Firebase persistence enabled"))
-  .catch((err) => console.error("Persistence setup failed:", err));
+  .catch((err) => console.error("❌ Persistence setup failed:", err));

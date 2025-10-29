@@ -1,5 +1,5 @@
 import axios from "axios";
-import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
 
 const isDev = import.meta.env.MODE === "development";
 
@@ -20,46 +20,159 @@ console.log("🌍 Using API Base URL:", baseURL);
 const api = axios.create({
   baseURL: `${baseURL}/api`,
   withCredentials: false,
-  timeout: 30000,
+  timeout: 60000, // Increased timeout for file processing
 });
 
-// 🔑 Firebase token handling
-let currentToken: string | null = null;
+// Enhanced Firebase token management
+let tokenRefreshPromise: Promise<string> | null = null;
 const auth = getAuth();
 
+// Function to refresh token with retry logic
+const refreshToken = async (): Promise<string> => {
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error("No authenticated user");
+  }
+
+  try {
+    console.log("🔄 Refreshing Firebase token...");
+    const token = await user.getIdToken(true); // Force refresh
+    console.log("✅ Token refreshed successfully");
+    return token;
+  } catch (error) {
+    console.error("❌ Failed to refresh token:", error);
+    // If token refresh fails, sign out the user
+    await signOut(auth);
+    throw new Error("Authentication failed. Please sign in again.");
+  }
+};
+
+// Get current token with automatic refresh
+const getCurrentToken = async (): Promise<string | null> => {
+  const user = auth.currentUser;
+  if (!user) return null;
+
+  try {
+    // If we're already refreshing, wait for that promise
+    if (tokenRefreshPromise) {
+      return await tokenRefreshPromise;
+    }
+
+    // Get fresh token
+    const token = await user.getIdToken();
+    return token;
+  } catch (error) {
+    console.error("❌ Error getting token:", error);
+    return null;
+  }
+};
+
+// Listen for auth state changes
 onAuthStateChanged(auth, async (user) => {
-  currentToken = user ? await user.getIdToken() : null;
+  if (user) {
+    try {
+      console.log("👤 User signed in, getting fresh token...");
+      await user.getIdToken();
+      console.log("✅ Token updated on auth state change");
+    } catch (error) {
+      console.error("❌ Failed to get token on auth change:", error);
+    }
+  } else {
+    console.log("👤 User signed out, clearing token");
+    tokenRefreshPromise = null;
+  }
 });
 
-// ✅ Attach token automatically to all requests
+// Enhanced request interceptor with token refresh
 api.interceptors.request.use(async (config) => {
-  const user = auth.currentUser;
-  if (user) {
-    const token = currentToken || (await user.getIdToken());
-    if (token) config.headers.Authorization = `Bearer ${token}`;
+  // Skip auth for public endpoints
+  const publicEndpoints = [
+    '/room/', // Room endpoints don't need auth (except create)
+    '/quiz/submit' // Generated quiz submission
+  ];
+  
+  const isPublicEndpoint = publicEndpoints.some(endpoint => 
+    config.url?.startsWith(endpoint) && 
+    !config.url?.includes('/create') && 
+    !config.url?.includes('/participants') && 
+    !config.url?.includes('/close')
+  );
+
+  if (isPublicEndpoint) {
+    console.log("🌐 Public endpoint, skipping auth");
+    return config;
   }
+
+  try {
+    const token = await getCurrentToken();
+    
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+      console.log("🔑 Added auth token to request");
+    } else {
+      console.warn("⚠️ No auth token available");
+    }
+  } catch (error) {
+    console.error("❌ Token error in interceptor:", error);
+    // Don't block the request, just continue without token
+  }
+
+  console.log("📤 Outgoing request:", {
+    url: config.url,
+    method: config.method,
+    hasData: !!config.data,
+    dataType: config.data instanceof FormData ? 'FormData' : 'JSON'
+  });
+
   return config;
 });
 
-// Enhanced error interceptor
+// Enhanced response interceptor with token refresh on 401
 api.interceptors.response.use(
-  (response) => response,
-  (error) => {
+  (response) => {
+    console.log("✅ Request successful:", {
+      url: response.config.url,
+      status: response.status
+    });
+    return response;
+  },
+  async (error) => {
+    const originalRequest = error.config;
+    
     console.error("🚨 API Error:", {
-      url: error.config?.url,
-      method: error.config?.method,
+      url: originalRequest?.url,
+      method: originalRequest?.method,
       status: error.response?.status,
       message: error.message,
       code: error.code
     });
-    
-    if (error.code === 'ERR_NETWORK') {
-      console.error("🌐 Network Error - Check:");
-      console.error("1. Server URL:", baseURL);
-      console.error("2. CORS configuration");
-      console.error("3. Server status");
+
+    // Handle token expiration (401)
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      console.log("🔄 Token expired, attempting refresh...");
+      originalRequest._retry = true;
+
+      try {
+        // Refresh the token
+        const newToken = await refreshToken();
+        
+        // Retry the original request with new token
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        console.log("🔄 Retrying request with fresh token...");
+        return api(originalRequest);
+      } catch (refreshError) {
+        console.error("❌ Token refresh failed:", refreshError);
+        // Sign out user if refresh fails
+        await signOut(auth);
+        return Promise.reject(new Error("Authentication failed. Please sign in again."));
+      }
     }
-    
+
+    // Handle timeouts
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      console.error("⏰ Request timeout");
+    }
+
     return Promise.reject(error);
   }
 );
@@ -188,19 +301,20 @@ export async function createRoom(data: FormData | {
         }
       : {};
 
-    console.log("📤 Creating room with data:", 
-      isFormData ? "FormData" : JSON.stringify(data, null, 2)
-    );
-
+    console.log("📤 Creating room...");
     const res = await api.post("/room/create", data, config);
     return res.data;
   } catch (err: any) {
-    console.error("❌ createRoom failed:", {
-      error: err.message,
-      code: err.code,
-      response: err.response?.data
-    });
-    throw new Error(err?.response?.data?.error || "Failed to create room");
+    console.error("❌ createRoom failed:", err.message);
+    
+    // Provide user-friendly error messages
+    if (err.response?.status === 401) {
+      throw new Error("Your session has expired. Please sign in again.");
+    } else if (err.code === 'ECONNABORTED') {
+      throw new Error("Request timed out. The server might be processing a large file. Please try again.");
+    } else {
+      throw new Error(err.response?.data?.error || "Failed to create room");
+    }
   }
 }
 
