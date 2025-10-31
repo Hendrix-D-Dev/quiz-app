@@ -108,12 +108,15 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
     let correct = 0;
     const total = answeredCount;
     
+    // Calculate correct answers from the answers object
     Object.values(answers).forEach((answer: any) => {
       if (answer.isCorrect) correct++;
     });
 
     const uid = (req as any).verifiedUid || "anonymous";
     const generatedResultId = "generated-" + Date.now();
+    
+    // Create the score object with ALL required fields
     const score = {
       quizId: "generated",
       quizTitle,
@@ -121,28 +124,35 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       score: correct,
       total,
       createdAt: Date.now(),
-      resultId: generatedResultId, // Store the generated ID for reference
+      resultId: generatedResultId,
       isGenerated: true
     };
 
-    // Save generated quiz result to Firestore for authenticated users
+    debugLogger("quizController", { 
+      step: "generated-quiz-score-calculated", 
+      uid,
+      score: `${correct}/${total}`,
+      generatedResultId
+    });
+
+    // Save generated quiz result to Firestore for ALL users (both authenticated and anonymous)
     let firestoreResultId = generatedResultId;
-    if (uid !== "anonymous") {
-      try {
-        const resultRef = await db.collection("results").add(score);
-        firestoreResultId = resultRef.id; // Use the Firestore ID for consistency
-        debugLogger("quizController", { 
-          step: "generated-quiz-result-saved", 
-          generatedId: generatedResultId,
-          firestoreId: firestoreResultId
-        });
-      } catch (saveErr) {
-        debugLogger("quizController", { 
-          step: "generated-quiz-save-failed", 
-          error: saveErr 
-        });
-        // Even if save fails, return the generated result
-      }
+    try {
+      const resultRef = await db.collection("results").add(score);
+      firestoreResultId = resultRef.id;
+      debugLogger("quizController", { 
+        step: "generated-quiz-result-saved", 
+        generatedId: generatedResultId,
+        firestoreId: firestoreResultId,
+        uid
+      });
+    } catch (saveErr) {
+      debugLogger("quizController", { 
+        step: "generated-quiz-save-failed", 
+        error: saveErr,
+        uid 
+      });
+      // Even if save fails, return the generated result with the generated ID
     }
 
     return res.json({
@@ -150,6 +160,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       message: "Generated quiz submission received successfully.",
       score: { correct, total },
       resultId: firestoreResultId,
+      generatedId: generatedResultId // Include both IDs for reference
     });
   } catch (err) {
     debugLogger("quizController", { step: "submitGeneratedQuiz-error", err });
@@ -212,7 +223,7 @@ export async function getLatestResult(req: Request, res: Response) {
 
     if (!uid) {
       debugLogger("getLatestResult", { step: "no-uid" });
-      return res.json(null);
+      return res.status(401).json({ error: "Authentication required" });
     }
 
     try {
@@ -231,7 +242,7 @@ export async function getLatestResult(req: Request, res: Response) {
 
       if (snap.empty) {
         debugLogger("getLatestResult", { step: "no-results-found" });
-        return res.json(null);
+        return res.status(404).json({ error: "No results found" });
       }
 
       const doc = snap.docs[0];
@@ -256,10 +267,22 @@ export async function getLatestResult(req: Request, res: Response) {
         code: firestoreError.code 
       });
 
-      if (firestoreError.code === 5 || firestoreError.code === 'NOT_FOUND') {
-        debugLogger("getLatestResult", { step: "collection-not-found-returning-null" });
-        return res.json(null);
+      // Handle Firestore index errors gracefully
+      if (firestoreError.code === 9 || firestoreError.message.includes('index')) {
+        debugLogger("getLatestResult", { 
+          step: "index-required", 
+          suggestion: "Create Firestore index for results/uid/createdAt" 
+        });
+        return res.status(500).json({ 
+          error: "Database configuration required. Please try again later." 
+        });
       }
+      
+      if (firestoreError.code === 5 || firestoreError.code === 'NOT_FOUND') {
+        debugLogger("getLatestResult", { step: "collection-not-found-returning-404" });
+        return res.status(404).json({ error: "No results found" });
+      }
+      
       throw firestoreError;
     }
   } catch (err: any) {
@@ -286,7 +309,7 @@ export async function getResultById(req: Request, res: Response) {
     });
 
     if (!uid) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({ error: "Authentication required" });
     }
 
     // Handle generated result IDs (they start with "generated-")
@@ -296,36 +319,82 @@ export async function getResultById(req: Request, res: Response) {
         resultId: id 
       });
       
-      // For generated results, we need to find them by the resultId field
-      const snap = await db
-        .collection("results")
-        .where("uid", "==", uid)
-        .where("resultId", "==", id)
-        .limit(1)
-        .get();
+      try {
+        // For generated results, we need to find them by the resultId field
+        const snap = await db
+          .collection("results")
+          .where("uid", "==", uid)
+          .where("resultId", "==", id)
+          .limit(1)
+          .get();
 
-      if (snap.empty) {
         debugLogger("getResultById", { 
-          step: "generated-result-not-found", 
-          resultId: id 
+          step: "generated-query-executed", 
+          resultId: id,
+          resultsCount: snap.size,
+          empty: snap.empty
         });
-        return res.status(404).json({ error: "Generated result not found. It may have expired or been cleaned up." });
+
+        if (snap.empty) {
+          debugLogger("getResultById", { 
+            step: "generated-result-not-found", 
+            resultId: id,
+            suggestion: "trying-direct-document-access"
+          });
+          
+          // Try direct document access as fallback
+          const doc = await db.collection("results").doc(id).get();
+          if (doc.exists) {
+            const result = doc.data() as Result;
+            if (result.uid === uid) {
+              debugLogger("getResultById", { 
+                step: "generated-result-found-via-direct-access", 
+                resultId: id 
+              });
+              return res.json({ 
+                id: doc.id, 
+                ...result,
+                displayId: id
+              });
+            }
+          }
+          
+          return res.status(404).json({ 
+            error: "Result not found. It may have expired or been cleaned up.",
+            resultId: id
+          });
+        }
+
+        const doc = snap.docs[0];
+        const result = doc.data() as Result;
+        
+        debugLogger("getResultById", { 
+          step: "generated-result-found", 
+          resultId: id,
+          firestoreId: doc.id,
+          score: `${result.score}/${result.total}`
+        });
+
+        return res.json({ 
+          id: doc.id, 
+          ...result,
+          displayId: id // Return the original generated ID
+        });
+      } catch (queryError: any) {
+        debugLogger("getResultById", { 
+          step: "generated-query-error", 
+          error: queryError.message,
+          code: queryError.code
+        });
+        
+        // Handle Firestore index errors
+        if (queryError.code === 9 || queryError.message.includes('index')) {
+          return res.status(500).json({ 
+            error: "Database configuration required. Please try again later." 
+          });
+        }
+        throw queryError;
       }
-
-      const doc = snap.docs[0];
-      const result = doc.data() as Result;
-      
-      debugLogger("getResultById", { 
-        step: "generated-result-found", 
-        resultId: id,
-        firestoreId: doc.id
-      });
-
-      return res.json({ 
-        id: doc.id, 
-        ...result,
-        displayId: id // Return the original generated ID
-      });
     }
 
     // Handle regular Firestore document IDs
@@ -363,7 +432,8 @@ export async function getResultById(req: Request, res: Response) {
     debugLogger("getResultById", { 
       step: "error", 
       error: err.message,
-      resultId: req.params.id 
+      resultId: req.params.id,
+      stack: err.stack
     });
     res.status(500).json({ error: "Failed to fetch result" });
   }

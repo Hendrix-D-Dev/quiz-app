@@ -30,7 +30,7 @@ router.get("/results/:id", verifyFirebaseTokenMiddleware, getResultById);
 // Protected: submit saved quiz and return resultId
 router.post("/:id/submit", verifyFirebaseTokenMiddleware, submitQuiz);
 
-// Public: submit generated quiz
+// Public: submit generated quiz (no auth required)
 router.post("/submit", submitGeneratedQuiz);
 
 export default router;
