@@ -135,7 +135,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       generatedResultId
     });
 
-    // Save generated quiz result to Firestore for ALL users (both authenticated and anonymous)
+    // Save generated quiz result to Firestore for ALL users
     let firestoreResultId = generatedResultId;
     try {
       const resultRef = await db.collection("results").add(score);
@@ -146,10 +146,11 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
         firestoreId: firestoreResultId,
         uid
       });
-    } catch (saveErr) {
+    } catch (saveErr: any) {
       debugLogger("quizController", { 
         step: "generated-quiz-save-failed", 
-        error: saveErr,
+        error: saveErr.message,
+        code: saveErr.code,
         uid 
       });
       // Even if save fails, return the generated result with the generated ID
@@ -162,8 +163,12 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       resultId: firestoreResultId,
       generatedId: generatedResultId // Include both IDs for reference
     });
-  } catch (err) {
-    debugLogger("quizController", { step: "submitGeneratedQuiz-error", err });
+  } catch (err: any) {
+    debugLogger("quizController", { 
+      step: "submitGeneratedQuiz-error", 
+      error: err.message,
+      stack: err.stack 
+    });
     res.status(500).json({ error: "Failed to submit generated quiz" });
   }
 }
@@ -172,12 +177,17 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
 export async function getResults(req: Request, res: Response) {
   try {
     const uid = (req as any).verifiedUid;
-    if (!uid) return res.json([]);
-
+    
     debugLogger("getResults", { 
       step: "fetching-all", 
-      uid 
+      uid,
+      hasUid: !!uid
     });
+
+    if (!uid) {
+      debugLogger("getResults", { step: "no-uid-returning-empty" });
+      return res.json([]);
+    }
 
     const snap = await db
       .collection("results")
@@ -222,7 +232,7 @@ export async function getLatestResult(req: Request, res: Response) {
     });
 
     if (!uid) {
-      debugLogger("getLatestResult", { step: "no-uid" });
+      debugLogger("getLatestResult", { step: "no-uid-returning-401" });
       return res.status(401).json({ error: "Authentication required" });
     }
 
@@ -241,7 +251,7 @@ export async function getLatestResult(req: Request, res: Response) {
       });
 
       if (snap.empty) {
-        debugLogger("getLatestResult", { step: "no-results-found" });
+        debugLogger("getLatestResult", { step: "no-results-found-returning-404" });
         return res.status(404).json({ error: "No results found" });
       }
 
@@ -305,10 +315,12 @@ export async function getResultById(req: Request, res: Response) {
     debugLogger("getResultById", { 
       step: "start", 
       resultId: id,
-      uid 
+      uid,
+      isGenerated: id.startsWith("generated-")
     });
 
     if (!uid) {
+      debugLogger("getResultById", { step: "no-uid-returning-401" });
       return res.status(401).json({ error: "Authentication required" });
     }
 
@@ -359,6 +371,10 @@ export async function getResultById(req: Request, res: Response) {
             }
           }
           
+          debugLogger("getResultById", { 
+            step: "generated-result-not-found-final", 
+            resultId: id 
+          });
           return res.status(404).json({ 
             error: "Result not found. It may have expired or been cleaned up.",
             resultId: id
@@ -389,6 +405,10 @@ export async function getResultById(req: Request, res: Response) {
         
         // Handle Firestore index errors
         if (queryError.code === 9 || queryError.message.includes('index')) {
+          debugLogger("getResultById", { 
+            step: "index-error", 
+            suggestion: "Create Firestore index for results/uid/resultId" 
+          });
           return res.status(500).json({ 
             error: "Database configuration required. Please try again later." 
           });
@@ -398,6 +418,11 @@ export async function getResultById(req: Request, res: Response) {
     }
 
     // Handle regular Firestore document IDs
+    debugLogger("getResultById", { 
+      step: "regular-result-requested", 
+      resultId: id 
+    });
+    
     const doc = await db.collection("results").doc(id).get();
     
     if (!doc.exists) {
@@ -407,6 +432,13 @@ export async function getResultById(req: Request, res: Response) {
 
     const result = doc.data() as Result;
     
+    debugLogger("getResultById", { 
+      step: "result-found", 
+      resultId: id,
+      resultUid: result?.uid,
+      requestUid: uid
+    });
+    
     // Ensure user can only access their own results
     if (!result || result.uid !== uid) {
       debugLogger("getResultById", { 
@@ -414,7 +446,7 @@ export async function getResultById(req: Request, res: Response) {
         resultUid: result?.uid,
         requestUid: uid 
       });
-      return res.status(403).json({ error: "Access denied" });
+      return res.status(403).json({ error: "Access denied - you can only view your own results" });
     }
 
     debugLogger("getResultById", { 
