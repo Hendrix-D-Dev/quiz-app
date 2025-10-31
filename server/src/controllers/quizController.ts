@@ -90,7 +90,7 @@ export async function submitQuiz(req: Request, res: Response) {
   }
 }
 
-/** POST /api/quiz/submit (for generated quizzes) */
+/** POST /api/quiz/submit (for generated quizzes) - FIXED */
 export async function submitGeneratedQuiz(req: Request, res: Response) {
   try {
     const { answers, quizTitle = "Generated Quiz" } = req.body || {};
@@ -113,6 +113,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       if (answer.isCorrect) correct++;
     });
 
+    // 🚨 CRITICAL FIX: Use verified UID if available, otherwise use "anonymous"
     const uid = (req as any).verifiedUid || "anonymous";
     const generatedResultId = "generated-" + Date.now();
     
@@ -120,7 +121,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
     const score = {
       quizId: "generated",
       quizTitle,
-      uid,
+      uid, // This now uses the actual user UID if authenticated
       score: correct,
       total,
       createdAt: Date.now(),
@@ -132,7 +133,8 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       step: "generated-quiz-score-calculated", 
       uid,
       score: `${correct}/${total}`,
-      generatedResultId
+      generatedResultId,
+      isAuthenticated: uid !== "anonymous"
     });
 
     // Save generated quiz result to Firestore for ALL users
@@ -144,7 +146,8 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
         step: "generated-quiz-result-saved", 
         generatedId: generatedResultId,
         firestoreId: firestoreResultId,
-        uid
+        uid,
+        isAuthenticated: uid !== "anonymous"
       });
     } catch (saveErr: any) {
       debugLogger("quizController", { 
@@ -161,7 +164,8 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       message: "Generated quiz submission received successfully.",
       score: { correct, total },
       resultId: firestoreResultId,
-      generatedId: generatedResultId // Include both IDs for reference
+      generatedId: generatedResultId,
+      uid // Return the UID for debugging
     });
   } catch (err: any) {
     debugLogger("quizController", { 
@@ -306,7 +310,7 @@ export async function getLatestResult(req: Request, res: Response) {
   }
 }
 
-/** GET /api/quiz/results/:id */
+/** GET /api/quiz/results/:id - FIXED UID HANDLING */
 export async function getResultById(req: Request, res: Response) {
   try {
     const { id } = req.params;
@@ -324,6 +328,10 @@ export async function getResultById(req: Request, res: Response) {
       return res.status(401).json({ error: "Authentication required" });
     }
 
+    // 🚨 CRITICAL FIX: Handle both authenticated and anonymous results
+    let resultDoc: any = null;
+    let resultData: Result | null = null;
+
     // Handle generated result IDs (they start with "generated-")
     if (id.startsWith("generated-")) {
       debugLogger("getResultById", { 
@@ -332,10 +340,9 @@ export async function getResultById(req: Request, res: Response) {
       });
       
       try {
-        // For generated results, we need to find them by the resultId field
+        // First try: Find by resultId field for authenticated users
         const snap = await db
           .collection("results")
-          .where("uid", "==", uid)
           .where("resultId", "==", id)
           .limit(1)
           .get();
@@ -347,54 +354,55 @@ export async function getResultById(req: Request, res: Response) {
           empty: snap.empty
         });
 
-        if (snap.empty) {
-          debugLogger("getResultById", { 
-            step: "generated-result-not-found", 
-            resultId: id,
-            suggestion: "trying-direct-document-access"
-          });
+        if (!snap.empty) {
+          resultDoc = snap.docs[0];
+          resultData = resultDoc.data() as Result;
           
-          // Try direct document access as fallback
-          const doc = await db.collection("results").doc(id).get();
-          if (doc.exists) {
-            const result = doc.data() as Result;
-            if (result.uid === uid) {
-              debugLogger("getResultById", { 
-                step: "generated-result-found-via-direct-access", 
-                resultId: id 
-              });
-              return res.json({ 
-                id: doc.id, 
-                ...result,
-                displayId: id
-              });
-            }
+          // 🚨 FIX: Allow access if either:
+          // 1. UID matches exactly, OR
+          // 2. Result was created by "anonymous" but user is now authenticated
+          if (resultData.uid === uid || resultData.uid === "anonymous") {
+            debugLogger("getResultById", { 
+              step: "generated-result-found", 
+              resultId: id,
+              firestoreId: resultDoc.id,
+              storedUid: resultData.uid,
+              requestUid: uid,
+              score: `${resultData.score}/${resultData.total}`
+            });
+
+            return res.json({ 
+              id: resultDoc.id, 
+              ...resultData,
+              displayId: id
+            });
           }
-          
-          debugLogger("getResultById", { 
-            step: "generated-result-not-found-final", 
-            resultId: id 
-          });
-          return res.status(404).json({ 
-            error: "Result not found. It may have expired or been cleaned up.",
-            resultId: id
-          });
         }
 
-        const doc = snap.docs[0];
-        const result = doc.data() as Result;
+        // Second try: Direct document access
+        const directDoc = await db.collection("results").doc(id).get();
+        if (directDoc.exists) {
+          resultData = directDoc.data() as Result;
+          if (resultData.uid === uid || resultData.uid === "anonymous") {
+            debugLogger("getResultById", { 
+              step: "generated-result-found-via-direct-access", 
+              resultId: id 
+            });
+            return res.json({ 
+              id: directDoc.id, 
+              ...resultData,
+              displayId: id
+            });
+          }
+        }
         
         debugLogger("getResultById", { 
-          step: "generated-result-found", 
-          resultId: id,
-          firestoreId: doc.id,
-          score: `${result.score}/${result.total}`
+          step: "generated-result-not-found-final", 
+          resultId: id 
         });
-
-        return res.json({ 
-          id: doc.id, 
-          ...result,
-          displayId: id // Return the original generated ID
+        return res.status(404).json({ 
+          error: "Result not found. It may have expired or been cleaned up.",
+          resultId: id
         });
       } catch (queryError: any) {
         debugLogger("getResultById", { 
@@ -407,7 +415,7 @@ export async function getResultById(req: Request, res: Response) {
         if (queryError.code === 9 || queryError.message.includes('index')) {
           debugLogger("getResultById", { 
             step: "index-error", 
-            suggestion: "Create Firestore index for results/uid/resultId" 
+            suggestion: "Create Firestore index for results/resultId" 
           });
           return res.status(500).json({ 
             error: "Database configuration required. Please try again later." 
@@ -430,20 +438,22 @@ export async function getResultById(req: Request, res: Response) {
       return res.status(404).json({ error: "Result not found" });
     }
 
-    const result = doc.data() as Result;
+    resultData = doc.data() as Result;
     
     debugLogger("getResultById", { 
       step: "result-found", 
       resultId: id,
-      resultUid: result?.uid,
+      resultUid: resultData?.uid,
       requestUid: uid
     });
     
-    // Ensure user can only access their own results
-    if (!result || result.uid !== uid) {
+    // 🚨 FIX: Allow access if either:
+    // 1. UID matches exactly, OR  
+    // 2. Result was created by "anonymous" but user is now authenticated
+    if (!resultData || (resultData.uid !== uid && resultData.uid !== "anonymous")) {
       debugLogger("getResultById", { 
         step: "access-denied", 
-        resultUid: result?.uid,
+        resultUid: resultData?.uid,
         requestUid: uid 
       });
       return res.status(403).json({ error: "Access denied - you can only view your own results" });
@@ -452,13 +462,13 @@ export async function getResultById(req: Request, res: Response) {
     debugLogger("getResultById", { 
       step: "result-returned", 
       resultId: id,
-      score: `${result.score}/${result.total}` 
+      score: `${resultData.score}/${resultData.total}` 
     });
 
     res.json({ 
       id: doc.id, 
-      ...result,
-      displayId: (result as any).resultId || doc.id
+      ...resultData,
+      displayId: (resultData as any).resultId || doc.id
     });
   } catch (err: any) {
     debugLogger("getResultById", { 
