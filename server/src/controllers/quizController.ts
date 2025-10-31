@@ -1,7 +1,6 @@
 import type { Request, Response } from "express";
 import { db } from "../config/firebaseAdmin.js";
 import type { SubmitPayload, Quiz, Result } from "../utils/types.js";
-import { generateQuestionsFromText } from "../services/aiService.js";
 import { debugLogger } from "../utils/debugLogger.js";
 
 /** GET /api/quiz */
@@ -113,7 +112,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       if (answer.isCorrect) correct++;
     });
 
-    // 🚨 CRITICAL FIX: Use verified UID if available, otherwise use "anonymous"
+    // Use verified UID if available, otherwise use "anonymous"
     const uid = (req as any).verifiedUid || "anonymous";
     const generatedResultId = "generated-" + Date.now();
     
@@ -121,7 +120,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
     const score = {
       quizId: "generated",
       quizTitle,
-      uid, // This now uses the actual user UID if authenticated
+      uid,
       score: correct,
       total,
       createdAt: Date.now(),
@@ -137,7 +136,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       isAuthenticated: uid !== "anonymous"
     });
 
-    // Save generated quiz result to Firestore for ALL users
+    // Save generated quiz result to Firestore
     let firestoreResultId = generatedResultId;
     try {
       const resultRef = await db.collection("results").add(score);
@@ -156,7 +155,6 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
         code: saveErr.code,
         uid 
       });
-      // Even if save fails, return the generated result with the generated ID
     }
 
     return res.json({
@@ -165,7 +163,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
       score: { correct, total },
       resultId: firestoreResultId,
       generatedId: generatedResultId,
-      uid // Return the UID for debugging
+      uid
     });
   } catch (err: any) {
     debugLogger("quizController", { 
@@ -177,7 +175,7 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
   }
 }
 
-/** GET /api/quiz/results/all */
+/** GET /api/quiz/results/all - FIXED (No orderBy to avoid index requirement) */
 export async function getResults(req: Request, res: Response) {
   try {
     const uid = (req as any).verifiedUid;
@@ -193,10 +191,10 @@ export async function getResults(req: Request, res: Response) {
       return res.json([]);
     }
 
+    // Remove orderBy to avoid Firestore index requirement
     const snap = await db
       .collection("results")
       .where("uid", "==", uid)
-      .orderBy("createdAt", "desc")
       .get();
 
     debugLogger("getResults", { 
@@ -207,12 +205,16 @@ export async function getResults(req: Request, res: Response) {
 
     if (snap.empty) return res.json([]);
 
+    // Get data and sort in memory instead
     const data = snap.docs.map((d) => ({ 
       id: d.id, 
       ...d.data(),
-      // For generated quizzes, use the stored resultId if available
       displayId: d.data().resultId || d.id
     }));
+    
+    // Sort by createdAt descending (most recent first)
+    data.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
+    
     res.json(data);
   } catch (err: any) {
     debugLogger("getResults", { 
@@ -224,7 +226,7 @@ export async function getResults(req: Request, res: Response) {
   }
 }
 
-/** GET /api/quiz/results/latest */
+/** GET /api/quiz/results/latest - FIXED (No orderBy to avoid index requirement) */
 export async function getLatestResult(req: Request, res: Response) {
   try {
     const uid = (req as any).verifiedUid;
@@ -241,11 +243,10 @@ export async function getLatestResult(req: Request, res: Response) {
     }
 
     try {
+      // Fetch all results for this user (no orderBy to avoid index requirement)
       const snap = await db
         .collection("results")
         .where("uid", "==", uid)
-        .orderBy("createdAt", "desc")
-        .limit(1)
         .get();
 
       debugLogger("getLatestResult", { 
@@ -259,20 +260,27 @@ export async function getLatestResult(req: Request, res: Response) {
         return res.status(404).json({ error: "No results found" });
       }
 
-      const doc = snap.docs[0];
-      const resultData = doc.data() as Result;
+      // Sort in memory to avoid needing Firestore index
+      const results = snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data() as Result
+      }));
+      
+      // Sort by createdAt descending (most recent first)
+      results.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      
+      const latest = results[0];
       
       debugLogger("getLatestResult", { 
         step: "result-found", 
-        resultId: doc.id,
-        score: `${resultData.score}/${resultData.total}`,
-        quizTitle: resultData.quizTitle
+        resultId: latest.id,
+        score: `${latest.score}/${latest.total}`,
+        quizTitle: latest.quizTitle
       });
 
       res.json({ 
-        id: doc.id, 
-        ...resultData,
-        displayId: (resultData as any).resultId || doc.id
+        ...latest,
+        displayId: (latest as any).resultId || latest.id
       });
     } catch (firestoreError: any) {
       debugLogger("getLatestResult", { 
@@ -281,17 +289,6 @@ export async function getLatestResult(req: Request, res: Response) {
         code: firestoreError.code 
       });
 
-      // Handle Firestore index errors gracefully
-      if (firestoreError.code === 9 || firestoreError.message.includes('index')) {
-        debugLogger("getLatestResult", { 
-          step: "index-required", 
-          suggestion: "Create Firestore index for results/uid/createdAt" 
-        });
-        return res.status(500).json({ 
-          error: "Database configuration required. Please try again later." 
-        });
-      }
-      
       if (firestoreError.code === 5 || firestoreError.code === 'NOT_FOUND') {
         debugLogger("getLatestResult", { step: "collection-not-found-returning-404" });
         return res.status(404).json({ error: "No results found" });
@@ -328,7 +325,6 @@ export async function getResultById(req: Request, res: Response) {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    // 🚨 CRITICAL FIX: Handle both authenticated and anonymous results
     let resultDoc: any = null;
     let resultData: Result | null = null;
 
@@ -340,7 +336,7 @@ export async function getResultById(req: Request, res: Response) {
       });
       
       try {
-        // First try: Find by resultId field for authenticated users
+        // First try: Find by resultId field
         const snap = await db
           .collection("results")
           .where("resultId", "==", id)
@@ -358,9 +354,7 @@ export async function getResultById(req: Request, res: Response) {
           resultDoc = snap.docs[0];
           resultData = resultDoc.data() as Result;
           
-          // 🚨 FIX: Allow access if either:
-          // 1. UID matches exactly, OR
-          // 2. Result was created by "anonymous" but user is now authenticated
+          // Allow access if UID matches or was anonymous
           if (resultData.uid === uid || resultData.uid === "anonymous") {
             debugLogger("getResultById", { 
               step: "generated-result-found", 
@@ -401,7 +395,7 @@ export async function getResultById(req: Request, res: Response) {
           resultId: id 
         });
         return res.status(404).json({ 
-          error: "Result not found. It may have expired or been cleaned up.",
+          error: "Result not found. It may have expired or been deleted.",
           resultId: id
         });
       } catch (queryError: any) {
@@ -447,9 +441,7 @@ export async function getResultById(req: Request, res: Response) {
       requestUid: uid
     });
     
-    // 🚨 FIX: Allow access if either:
-    // 1. UID matches exactly, OR  
-    // 2. Result was created by "anonymous" but user is now authenticated
+    // Allow access if UID matches or was anonymous
     if (!resultData || (resultData.uid !== uid && resultData.uid !== "anonymous")) {
       debugLogger("getResultById", { 
         step: "access-denied", 
