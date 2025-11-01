@@ -95,7 +95,9 @@ api.interceptors.request.use(async (config) => {
     config.url?.startsWith(endpoint) && 
     !config.url?.includes('/create') && 
     !config.url?.includes('/participants') && 
-    !config.url?.includes('/close')
+    !config.url?.includes('/close') &&
+    !config.url?.includes('/export') &&
+    !config.url?.includes('/active')
   );
 
   if (isPublicEndpoint) {
@@ -394,6 +396,53 @@ export async function closeRoom(code: string) {
 }
 
 /**
+ * NEW: Get active rooms for admin (for room recovery)
+ */
+export async function getActiveAdminRooms() {
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new Error("User not authenticated");
+
+    const token = await user.getIdToken();
+    
+    const res = await api.get("/room/active/admin", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    return res.data || [];
+  } catch (err: any) {
+    console.error("❌ getActiveAdminRooms failed:", err);
+    // Return empty array instead of throwing for better UX
+    return [];
+  }
+}
+
+/**
+ * NEW: Export room results (Admin only)
+ */
+export async function exportRoomResults(code: string, format: 'csv' | 'json' = 'csv') {
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new Error("User not authenticated");
+
+    const token = await user.getIdToken();
+    
+    const res = await api.get(`/room/${code.toUpperCase()}/export?format=${format}`, {
+      headers: { 
+        Authorization: `Bearer ${token}`,
+        'Content-Type': format === 'csv' ? 'text/csv' : 'application/json'
+      },
+      responseType: 'blob' // Important for file downloads
+    });
+
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ exportRoomResults failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to export room results");
+  }
+}
+
+/**
  * Fetch all quizzes (for room creation dropdown)
  */
 export async function fetchAllQuizzes() {
@@ -403,6 +452,84 @@ export async function fetchAllQuizzes() {
   } catch (err: any) {
     console.error("❌ fetchAllQuizzes failed:", err);
     throw new Error(err?.response?.data?.error || "Failed to fetch quizzes");
+  }
+}
+
+// ========================================
+// 🆕 SESSION MANAGEMENT HELPERS
+// ========================================
+
+/**
+ * Save room session to localStorage for recovery
+ */
+export function saveRoomSession(code: string, sessionData: any) {
+  try {
+    localStorage.setItem(`room_session_${code}`, JSON.stringify(sessionData));
+    console.log("💾 Room session saved:", code);
+  } catch (err) {
+    console.error("❌ Failed to save room session:", err);
+  }
+}
+
+/**
+ * Load room session from localStorage
+ */
+export function loadRoomSession(code: string) {
+  try {
+    const session = localStorage.getItem(`room_session_${code}`);
+    return session ? JSON.parse(session) : null;
+  } catch (err) {
+    console.error("❌ Failed to load room session:", err);
+    return null;
+  }
+}
+
+/**
+ * Remove room session from localStorage
+ */
+export function removeRoomSession(code: string) {
+  try {
+    localStorage.removeItem(`room_session_${code}`);
+    console.log("🗑️ Room session removed:", code);
+  } catch (err) {
+    console.error("❌ Failed to remove room session:", err);
+  }
+}
+
+/**
+ * Save quiz session to localStorage for recovery
+ */
+export function saveQuizSession(sessionData: any) {
+  try {
+    localStorage.setItem('quiz_session', JSON.stringify(sessionData));
+    console.log("💾 Quiz session saved");
+  } catch (err) {
+    console.error("❌ Failed to save quiz session:", err);
+  }
+}
+
+/**
+ * Load quiz session from localStorage
+ */
+export function loadQuizSession() {
+  try {
+    const session = localStorage.getItem('quiz_session');
+    return session ? JSON.parse(session) : null;
+  } catch (err) {
+    console.error("❌ Failed to load quiz session:", err);
+    return null;
+  }
+}
+
+/**
+ * Remove quiz session from localStorage
+ */
+export function removeQuizSession() {
+  try {
+    localStorage.removeItem('quiz_session');
+    console.log("🗑️ Quiz session removed");
+  } catch (err) {
+    console.error("❌ Failed to remove quiz session:", err);
   }
 }
 

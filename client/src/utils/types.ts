@@ -87,3 +87,71 @@ export type QuizResult = {
   correctCount: number;
   submittedAt: number;
 };
+
+// ========================================
+// 🆕 SESSION PERSISTENCE TYPES
+// ========================================
+
+export interface RoomSession {
+  code: string;
+  name: string;
+  matric: string;
+  startedAt: number;
+  timeLimit: number;
+  answers: Record<string, string>;
+  roomName?: string;
+  questionCount: number;
+}
+
+export interface QuizSession {
+  quizId?: string;
+  questions: Question[];
+  answers: Record<string, string>;
+  startedAt: number;
+  currentIndex: number;
+  quizTitle?: string;
+  isGenerated?: boolean;
+}
+
+export interface ActiveRoom {
+  code: string;
+  roomName?: string;
+  createdAt: number;
+  status: string;
+  participantCount: number;
+  timeLimit: number;
+  questionCount: number;
+}
+
+// ========================================
+// 📤 EXPORT TYPES
+// ========================================
+
+export interface ExportOptions {
+  format: 'csv' | 'json';
+  includeAnswers?: boolean;
+}
+
+export interface RoomExportData {
+  room: {
+    code: string;
+    roomName: string;
+    quizTitle: string;
+    createdAt: number;
+    totalParticipants: number;
+  };
+  participants: Array<{
+    name: string;
+    matric: string;
+    score: number;
+    correctCount: number;
+    totalQuestions: number;
+    submittedAt: number;
+    answers?: Array<{
+      question: string;
+      userAnswer: string;
+      correctAnswer: string;
+      isCorrect: boolean;
+    }>;
+  }>;
+}

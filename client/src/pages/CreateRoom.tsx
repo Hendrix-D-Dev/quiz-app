@@ -1,11 +1,19 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
-import { createRoom, fetchAllQuizzes } from "../services/api";
+import { createRoom, fetchAllQuizzes, getActiveAdminRooms } from "../services/api";
 import { useNavigate } from "react-router-dom";
 import { useDropzone } from "react-dropzone";
 
+interface ActiveRoom {
+  code: string;
+  roomName?: string;
+  createdAt: number;
+  status: string;
+  participantCount: number;
+}
+
 const CreateRoom = () => {
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const navigate = useNavigate();
   const [roomName, setRoomName] = useState("");
   const [roomCode, setRoomCode] = useState("");
@@ -19,35 +27,45 @@ const CreateRoom = () => {
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isLoadingQuizzes, setIsLoadingQuizzes] = useState(false);
+  const [activeRooms, setActiveRooms] = useState<ActiveRoom[]>([]);
+  const [showRoomRecovery, setShowRoomRecovery] = useState(false);
 
-  // Load quizzes on component mount
-  useState(() => {
-    const loadQuizzes = async () => {
+  // Load quizzes and active rooms on component mount
+  useEffect(() => {
+    const loadData = async () => {
       setIsLoadingQuizzes(true);
       try {
-        const quizzesData = await fetchAllQuizzes();
+        const [quizzesData, activeRoomsData] = await Promise.all([
+          fetchAllQuizzes(),
+          getActiveAdminRooms()
+        ]);
         setQuizzes(quizzesData);
+        setActiveRooms(activeRoomsData || []);
+        
+        // Show recovery alert if there are active rooms
+        if (activeRoomsData && activeRoomsData.length > 0) {
+          setShowRoomRecovery(true);
+        }
       } catch (err) {
-        console.error("Failed to load quizzes:", err);
+        console.error("Failed to load data:", err);
       } finally {
         setIsLoadingQuizzes(false);
       }
     };
-    loadQuizzes();
-  });
+    loadData();
+  }, []);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles && acceptedFiles.length > 0) {
       const file = acceptedFiles[0];
       
-      // Validate file size (25MB max - matching your upload.ts)
       if (file.size > 25 * 1024 * 1024) {
         setError("File size must be less than 25MB");
         return;
       }
       
       setUploadedFile(file);
-      setSelectedQuizId(""); // Clear quiz selection when file is uploaded
+      setSelectedQuizId("");
       setError(null);
     }
   }, []);
@@ -55,7 +73,6 @@ const CreateRoom = () => {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      // Support all file types from your upload.ts middleware
       'application/pdf': ['.pdf'],
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
       'application/msword': ['.doc'],
@@ -80,112 +97,52 @@ const CreateRoom = () => {
     setUploadedFile(null);
   };
 
-  // Helper function to get file type icon
   const getFileIcon = (fileName: string) => {
     const ext = fileName.toLowerCase().split('.').pop();
     switch (ext) {
-      case 'pdf':
-        return '📄';
-      case 'doc':
-      case 'docx':
-        return '📝';
-      case 'txt':
-        return '📃';
-      case 'csv':
-        return '📊';
-      case 'html':
-      case 'htm':
-        return '🌐';
-      case 'ppt':
-      case 'pptx':
-        return '📊';
-      case 'xls':
-      case 'xlsx':
-        return '📈';
-      case 'epub':
-        return '📚';
-      case 'png':
-      case 'jpg':
-      case 'jpeg':
-      case 'gif':
-        return '🖼️';
-      case 'json':
-        return '⚙️';
-      default:
-        return '📎';
+      case 'pdf': return '📄';
+      case 'doc': case 'docx': return '📝';
+      case 'txt': return '📃';
+      case 'csv': return '📊';
+      case 'html': case 'htm': return '🌐';
+      case 'ppt': case 'pptx': return '📊';
+      case 'xls': case 'xlsx': return '📈';
+      case 'epub': return '📚';
+      case 'png': case 'jpg': case 'jpeg': case 'gif': return '🖼️';
+      case 'json': return '⚙️';
+      default: return '📎';
     }
   };
 
-  // Helper function to get file type description
   const getFileTypeDescription = (fileName: string) => {
     const ext = fileName.toLowerCase().split('.').pop();
     switch (ext) {
-      case 'pdf':
-        return 'PDF Document';
-      case 'doc':
-      case 'docx':
-        return 'Word Document';
-      case 'txt':
-        return 'Text File';
-      case 'csv':
-        return 'CSV Spreadsheet';
-      case 'html':
-      case 'htm':
-        return 'HTML File';
-      case 'ppt':
-      case 'pptx':
-        return 'PowerPoint Presentation';
-      case 'xls':
-      case 'xlsx':
-        return 'Excel Spreadsheet';
-      case 'epub':
-        return 'EPUB eBook';
-      case 'png':
-      case 'jpg':
-      case 'jpeg':
-        return 'Image File';
-      case 'gif':
-        return 'GIF Image';
-      case 'json':
-        return 'JSON Data';
-      default:
-        return 'Document';
+      case 'pdf': return 'PDF Document';
+      case 'doc': case 'docx': return 'Word Document';
+      case 'txt': return 'Text File';
+      case 'csv': return 'CSV Spreadsheet';
+      case 'html': case 'htm': return 'HTML File';
+      case 'ppt': case 'pptx': return 'PowerPoint Presentation';
+      case 'xls': case 'xlsx': return 'Excel Spreadsheet';
+      case 'epub': return 'EPUB eBook';
+      case 'png': case 'jpg': case 'jpeg': return 'Image File';
+      case 'gif': return 'GIF Image';
+      case 'json': return 'JSON Data';
+      default: return 'Document';
     }
   };
-
-  if (role !== "admin") {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-red-50 flex items-center justify-center p-6">
-        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-8 text-center max-w-md border border-white/20">
-          <div className="w-16 h-16 bg-gradient-to-br from-rose-500 to-red-500 rounded-full flex items-center justify-center text-white text-2xl mx-auto mb-4">
-            ⚠️
-          </div>
-          <h3 className="text-2xl font-bold text-slate-800 mb-2">Access Denied</h3>
-          <p className="text-slate-600 mb-6">Only administrators can create quiz rooms.</p>
-          <button 
-            onClick={() => navigate("/")}
-            className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
-          >
-            Go Home
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
-    // Validate: either file or quiz must be selected
     if (!uploadedFile && !selectedQuizId) {
       setError("Please either upload a document or select an existing quiz");
       setLoading(false);
       return;
     }
 
-    // Validate custom room code if used
     if (useCustomCode && roomCode) {
       if (roomCode.length < 4 || roomCode.length > 10) {
         setError("Room code must be between 4 and 10 characters");
@@ -221,7 +178,17 @@ const CreateRoom = () => {
       const response = await createRoom(formData);
 
       if (response?.roomCode || response?.room?.roomCode) {
-        setCreatedRoomCode(response.roomCode || response.room.roomCode);
+        const newRoomCode = response.roomCode || response.room.roomCode;
+        setCreatedRoomCode(newRoomCode);
+        
+        // Store room creation in localStorage for recovery
+        const roomSession = {
+          code: newRoomCode,
+          roomName: roomName || `Room ${newRoomCode}`,
+          createdAt: Date.now(),
+          createdBy: user?.uid
+        };
+        localStorage.setItem(`room_${newRoomCode}`, JSON.stringify(roomSession));
       } else {
         setError("Failed to create room. Please try again.");
       }
@@ -233,12 +200,107 @@ const CreateRoom = () => {
     }
   };
 
+  const joinExistingRoom = (roomCode: string) => {
+    navigate(`/room/${roomCode}`);
+  };
+
+  const createNewRoom = () => {
+    setShowRoomRecovery(false);
+    // Reset form for new room
+    setRoomName("");
+    setRoomCode("");
+    setUseCustomCode(false);
+    setTimeLimit(30);
+    setQuestionCount(10);
+    setUploadedFile(null);
+    setSelectedQuizId("");
+  };
+
+  if (role !== "admin") {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-red-50 flex items-center justify-center p-6">
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-8 text-center max-w-md border border-white/20">
+          <div className="w-16 h-16 bg-gradient-to-br from-rose-500 to-red-500 rounded-full flex items-center justify-center text-white text-2xl mx-auto mb-4">
+            ⚠️
+          </div>
+          <h3 className="text-2xl font-bold text-slate-800 mb-2">Access Denied</h3>
+          <p className="text-slate-600 mb-6">Only administrators can create quiz rooms.</p>
+          <button 
+            onClick={() => navigate("/")}
+            className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+          >
+            Go Home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const questionOptions = [5, 10, 15, 20, 25, 30];
   const timeOptions = [5, 10, 15, 20, 30, 45, 60];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/30 to-purple-50/30 flex items-center justify-center p-6">
       <div className="w-full max-w-2xl">
+        {/* Room Recovery Alert */}
+        {showRoomRecovery && activeRooms.length > 0 && (
+          <div className="mb-6 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-6 animate-fade-in">
+            <div className="flex items-start space-x-4">
+              <div className="flex-shrink-0 w-12 h-12 bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl flex items-center justify-center text-white text-lg">
+                🔄
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-amber-800 mb-2">
+                  Active Room Detected
+                </h3>
+                <p className="text-amber-700 mb-4">
+                  You have {activeRooms.length} active room{activeRooms.length > 1 ? 's' : ''}. 
+                  Would you like to rejoin or create a new room?
+                </p>
+                <div className="space-y-3">
+                  {activeRooms.map((room) => (
+                    <div key={room.code} className="flex items-center justify-between bg-white/80 rounded-xl p-4 border border-amber-200">
+                      <div>
+                        <div className="font-semibold text-amber-900">
+                          {room.roomName || `Room ${room.code}`}
+                        </div>
+                        <div className="text-sm text-amber-700">
+                          Code: <span className="font-mono font-bold">{room.code}</span> • 
+                          Participants: {room.participantCount} • 
+                          Created: {new Date(room.createdAt).toLocaleTimeString()}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => joinExistingRoom(room.code)}
+                        className="px-4 py-2 bg-gradient-to-r from-amber-600 to-orange-600 text-white rounded-lg font-semibold hover:shadow-lg transition-all flex items-center space-x-2"
+                      >
+                        <span>Rejoin</span>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex space-x-3 mt-4">
+                  <button
+                    onClick={createNewRoom}
+                    className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+                  >
+                    Create New Room
+                  </button>
+                  <button
+                    onClick={() => setShowRoomRecovery(false)}
+                    className="px-6 py-3 bg-slate-100 text-slate-700 rounded-xl font-semibold hover:bg-slate-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="text-center mb-8">
           <div className="w-20 h-20 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl flex items-center justify-center text-2xl text-white shadow-lg mx-auto mb-4">
@@ -427,6 +489,7 @@ const CreateRoom = () => {
                   <li>• {uploadedFile ? `Quiz from: ${getFileTypeDescription(uploadedFile.name)}` : selectedQuizId ? "Using existing quiz" : "Upload document or select quiz"}</li>
                   <li>• Students join with room code</li>
                   <li>• Real-time progress tracking</li>
+                  <li>• Session recovery enabled</li>
                 </ul>
               </div>
 
@@ -516,6 +579,14 @@ const CreateRoom = () => {
                 <div className="bg-green-50 rounded-lg p-3">
                   <div className="text-green-600 font-semibold">Monitor</div>
                   <div className="text-green-500">Track submissions</div>
+                </div>
+                <div className="bg-amber-50 rounded-lg p-3">
+                  <div className="text-amber-600 font-semibold">Recovery</div>
+                  <div className="text-amber-500">Auto-save progress</div>
+                </div>
+                <div className="bg-purple-50 rounded-lg p-3">
+                  <div className="text-purple-600 font-semibold">Export</div>
+                  <div className="text-purple-500">Download results</div>
                 </div>
               </div>
             </div>

@@ -16,9 +16,143 @@ const checkRoomCodeExists = async (code: string): Promise<boolean> => {
 };
 
 /**
+ * NEW: Get active rooms for admin (for room recovery)
+ */
+export const getActiveAdminRooms = async (req: Request, res: Response) => {
+  try {
+    const verifiedUid = (req as any).verifiedUid;
+    
+    if (!verifiedUid) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Get all active rooms created by this admin
+    const snapshot = await db
+      .collection("rooms")
+      .where("createdBy", "==", verifiedUid)
+      .where("status", "==", "active")
+      .orderBy("createdAt", "desc")
+      .limit(10)
+      .get();
+
+    const activeRooms = snapshot.docs.map((doc: QueryDocumentSnapshot) => {
+      const room = doc.data() as Room;
+      return {
+        code: room.code,
+        roomName: room.roomName,
+        createdAt: room.createdAt,
+        status: room.status,
+        participantCount: room.participantCount || 0,
+        timeLimit: room.timeLimit,
+        questionCount: room.questionCount
+      };
+    });
+
+    res.json(activeRooms);
+  } catch (err) {
+    console.error("Error fetching active rooms:", err);
+    res.status(500).json({ error: "Failed to fetch active rooms" });
+  }
+};
+
+/**
+ * NEW: Export room results (Admin only)
+ */
+export const exportRoomResults = async (req: Request, res: Response) => {
+  try {
+    const verifiedUid = (req as any).verifiedUid;
+    const { code } = req.params;
+    const { format = 'csv' } = req.query;
+
+    // Get room to verify ownership
+    const roomDoc = await db.collection("rooms").doc(code.toUpperCase()).get();
+    if (!roomDoc.exists) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    const room = roomDoc.data() as Room;
+
+    // Verify the user is the room creator
+    if (room.createdBy !== verifiedUid) {
+      return res.status(403).json({ error: "Only the room creator can export results" });
+    }
+
+    // Fetch all participants
+    const snapshot = await db
+      .collection("rooms")
+      .doc(code.toUpperCase())
+      .collection("participants")
+      .orderBy("submittedAt", "desc")
+      .get();
+
+    const participants = snapshot.docs.map(
+      (doc: QueryDocumentSnapshot) => ({
+        id: doc.id,
+        ...doc.data(),
+      })
+    ) as Participant[];
+
+    // Fetch quiz details for export
+    const quizDoc = await db.collection("quizzes").doc(room.quizId).get();
+    const quiz = quizDoc.data();
+    const quizTitle = quiz?.title || `Quiz ${room.quizId}`;
+
+    if (format === 'csv') {
+      // Generate CSV data
+      const headers = ['Name', 'Matric Number', 'Score', 'Correct Answers', 'Total Questions', 'Percentage', 'Submitted At'];
+      const csvData = participants.map(p => [
+        p.name,
+        p.matric,
+        p.score.toString(),
+        p.correctCount.toString(),
+        p.totalQuestions.toString(),
+        `${p.score}%`,
+        new Date(p.submittedAt).toLocaleString()
+      ]);
+
+      const csvContent = [
+        headers.join(','),
+        ...csvData.map(row => row.map(field => `"${field}"`).join(','))
+      ].join('\n');
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${quizTitle}_${code}_results.csv"`);
+      return res.send(csvContent);
+    } else if (format === 'json') {
+      // Generate JSON data
+      const exportData = {
+        room: {
+          code: room.code,
+          roomName: room.roomName,
+          quizTitle,
+          createdAt: room.createdAt,
+          totalParticipants: participants.length
+        },
+        participants: participants.map(p => ({
+          name: p.name,
+          matric: p.matric,
+          score: p.score,
+          correctCount: p.correctCount,
+          totalQuestions: p.totalQuestions,
+          submittedAt: p.submittedAt,
+          answers: p.answers
+        }))
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${quizTitle}_${code}_results.json"`);
+      return res.json(exportData);
+    } else {
+      return res.status(400).json({ error: "Unsupported format. Use 'csv' or 'json'." });
+    }
+  } catch (err) {
+    console.error("Error exporting room results:", err);
+    res.status(500).json({ error: "Failed to export room results" });
+  }
+};
+
+/**
  * Create a new room (Admin only - requires auth middleware)
- * Now supports both existing quizId and file upload for new quiz generation
- * Also supports custom room codes
  */
 export const createRoom = async (req: Request, res: Response) => {
   try {
@@ -46,17 +180,14 @@ export const createRoom = async (req: Request, res: Response) => {
     // Generate or validate room code
     let code = customRoomCode;
     if (code) {
-      // Validate custom room code
       if (code.length < 4 || code.length > 10) {
         return res.status(400).json({ error: "Room code must be between 4 and 10 characters" });
       }
       
-      // Check if custom code already exists
       if (await checkRoomCodeExists(code.toUpperCase())) {
         return res.status(400).json({ error: "Room code already exists. Please choose a different code." });
       }
     } else {
-      // Generate unique room code
       let attempts = 0;
       do {
         code = generateRoomCode();
@@ -67,14 +198,13 @@ export const createRoom = async (req: Request, res: Response) => {
       } while (await checkRoomCodeExists(code));
     }
 
-    code = code.toUpperCase(); // Ensure uppercase
+    code = code.toUpperCase();
 
     // Case 1: File upload - generate new quiz
     if (file) {
       try {
         console.log(`Processing uploaded file: ${file.originalname}`);
         
-        // Extract text from the uploaded file using your existing parser system
         const text = await parseFile(file.buffer, file.originalname);
         
         if (!text || text.trim().length === 0) {
@@ -85,7 +215,6 @@ export const createRoom = async (req: Request, res: Response) => {
 
         console.log(`Successfully extracted text (${text.length} chars), generating quiz...`);
 
-        // Generate quiz using your existing AI service
         const questions = await generateQuestionsFromText(text, parseInt(questionCount), "medium");
         
         if (!questions || questions.length === 0) {
@@ -96,7 +225,6 @@ export const createRoom = async (req: Request, res: Response) => {
 
         console.log(`Generated ${questions.length} questions, creating quiz document...`);
 
-        // Create quiz document in Firestore
         const quizData = {
           title: roomName || `Quiz from ${file.originalname}`,
           description: `Automatically generated from ${file.originalname}`,
@@ -109,7 +237,6 @@ export const createRoom = async (req: Request, res: Response) => {
         const docRef = await db.collection("quizzes").add(quizData);
         finalQuizId = docRef.id;
 
-        // Update with ID
         await docRef.update({
           id: finalQuizId,
         });
@@ -135,7 +262,6 @@ export const createRoom = async (req: Request, res: Response) => {
       quizQuestions = quiz?.questions || [];
       const availableQuestions = quizQuestions.length;
 
-      // Validate question count
       if (parseInt(questionCount) > availableQuestions) {
         return res.status(400).json({
           error: `Quiz only has ${availableQuestions} questions, cannot create room with ${questionCount}`,
@@ -153,7 +279,7 @@ export const createRoom = async (req: Request, res: Response) => {
       code,
       quizId: finalQuizId,
       createdBy: verifiedUid,
-      timeLimit: Number(timeLimit), // in seconds
+      timeLimit: Number(timeLimit),
       questionCount: Number(questionCount),
       roomName: roomName || `Room ${code}`,
       createdAt: Date.now(),
@@ -223,6 +349,7 @@ export const getRoom = async (req: Request, res: Response) => {
         timeLimit: room.timeLimit,
         questionCount: room.questionCount,
         status: room.status,
+        createdAt: room.createdAt,
       },
       questions,
       timeLimit: room.timeLimit,

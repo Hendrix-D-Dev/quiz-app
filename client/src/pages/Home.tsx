@@ -177,8 +177,8 @@ const Home = () => {
 
             {/* Stats */}
             <div className="grid grid-cols-3 gap-12 mt-20">
-              <StatCard number="10K+" label="Active Learners" />
-              <StatCard number="50K+" label="Quizzes Created" />
+              <StatCard number="10+" label="Active Learners" />
+              <StatCard number="50++" label="Quizzes Created" />
               <StatCard number="99%" label="Satisfaction Rate" />
             </div>
           </div>
@@ -221,12 +221,6 @@ const Home = () => {
               title="Instant Feedback" 
               description="Get immediate scoring with detailed explanations for every answer" 
               color="blue" 
-            />
-            <FeatureCard 
-              icon="📱" 
-              title="Mobile Optimized" 
-              description="Seamless experience across all devices with responsive design" 
-              color="pink" 
             />
             <FeatureCard 
               icon="🔐" 
