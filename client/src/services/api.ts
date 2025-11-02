@@ -180,6 +180,74 @@ api.interceptors.response.use(
 );
 
 // ========================================
+// 📄 DOCUMENT PROCESSING WITH ENHANCED ERROR HANDLING
+// ========================================
+export async function processDocument(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    console.log("📤 Processing document:", file.name, file.type);
+    const res = await api.post("/ai/process", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ processDocument failed:", err);
+    
+    // Enhanced error handling for PDF and content issues
+    const errorMessage = err.response?.data?.error || err.message;
+    
+    if (errorMessage.includes('PDF_CONTENT_ERROR') || 
+        errorMessage.includes('INVALID_CONTENT') ||
+        errorMessage.includes('image-based') ||
+        errorMessage.includes('scanned')) {
+      throw new Error(
+        "Unable to extract educational content from this PDF. " +
+        "This may be a scanned PDF or contain limited text. " +
+        "Please try a PDF with selectable text, or use DOCX/TXT format for best results."
+      );
+    } else if (errorMessage.includes('POOR_QUALITY_QUESTIONS') ||
+               errorMessage.includes('mostly metadata')) {
+      throw new Error(
+        "The content extracted was not suitable for quiz generation. " +
+        "The document appears to contain mostly technical metadata instead of educational content. " +
+        "Please try a different document with substantial educational text."
+      );
+    } else if (errorMessage.includes('too short') || 
+               errorMessage.includes('insufficient content')) {
+      throw new Error(
+        "The document doesn't contain enough text for quiz generation. " +
+        "Please use a document with more substantial educational content."
+      );
+    } else {
+      throw new Error(err.response?.data?.error || "Failed to process document");
+    }
+  }
+}
+
+export async function generateQuiz(
+  text: string,
+  chapter: string,
+  difficulty: string,
+  questionCount: number
+) {
+  try {
+    const res = await api.post("/ai/generate-quiz", {
+      text,
+      chapter,
+      difficulty,
+      questionCount,
+    });
+    return res.data;
+  } catch (err: any) {
+    console.error("❌ generateQuiz failed:", err);
+    throw new Error(err?.response?.data?.error || "Failed to generate quiz");
+  }
+}
+
+// ========================================
 // 📄 CHAPTER EXTRACTION
 // ========================================
 export async function extractChapters(file: File) {

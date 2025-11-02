@@ -89,7 +89,7 @@ export async function parsePdf(buffer: Buffer): Promise<string> {
   }
 
   throw new Error(
-    "This PDF appears to be image-based, scanned, or encrypted. " +
+    "PDF_CONTENT_ERROR: This PDF appears to be image-based, scanned, or encrypted. " +
     "The system could not extract readable text. Please use text-based PDFs for best results."
   );
 }
@@ -123,6 +123,11 @@ async function extractWithPdfJs(buffer: Buffer): Promise<string> {
           .trim();
         
         fullText += pageText + '\n\n';
+        
+        // Early validation for poor content
+        if (pageNum === 3 && !hasSubstantialContent(fullText)) {
+          throw new Error('Insufficient content in first few pages');
+        }
       } catch (pageErr) {
         debugLogger("pdfParser", {
           step: "page extraction failed",
@@ -134,7 +139,14 @@ async function extractWithPdfJs(buffer: Buffer): Promise<string> {
     }
     
     await pdf.destroy();
-    return cleanExtractedText(fullText);
+    const cleanedText = cleanExtractedText(fullText);
+    
+    // Validate extracted content
+    if (!isValidContent(cleanedText)) {
+      throw new Error('Extracted content appears to be metadata or poor quality');
+    }
+    
+    return cleanedText;
   } catch (err) {
     throw new Error(`PDF.js extraction failed: ${err}`);
   }
@@ -200,7 +212,9 @@ function extractReadableStrings(buffer: Buffer): string {
       const words = text.match(/[a-zA-Z]{3,}/g) || [];
       const sentences = text.match(/[a-zA-Z][a-zA-Z\s,.!?]{10,}[.!?]/g) || [];
       
-      const extracted = [...words, ...sentences].join(' ');
+      const extracted = [...words, ...sentences]
+        .filter(text => !isMetadataLine(text))
+        .join(' ');
       
       if (extracted.length > bestText.length && isReadableText(extracted)) {
         bestText = extracted;
@@ -232,6 +246,54 @@ async function extractWithOCR(buffer: Buffer): Promise<string> {
   } catch (err) {
     throw new Error('OCR not available');
   }
+}
+
+/** Enhanced content validation */
+function isValidContent(text: string): boolean {
+  if (!text || text.length < 100) return false;
+  
+  const wordCount = text.split(/\s+/).length;
+  const sentenceCount = text.split(/[.!?]+/).length;
+  
+  // Check for metadata patterns
+  const metadataPatterns = [
+    /Producer:.+/i,
+    /Creator:.+/i,
+    /CreationDate:.+/i,
+    /ModDate:.+/i,
+    /PDF-.+/i,
+    /^[\d\s\.\-:]+$/m // Lines with only numbers, dots, dashes
+  ];
+  
+  const hasMetadata = metadataPatterns.some(pattern => pattern.test(text));
+  const metadataRatio = calculateMetadataRatio(text);
+  
+  return wordCount > 100 && 
+         sentenceCount > 3 && 
+         !hasMetadata && 
+         metadataRatio < 0.3; // Less than 30% metadata-like content
+}
+
+/** Check if text has substantial content */
+function hasSubstantialContent(text: string): boolean {
+  const words = text.split(/\s+/);
+  const uniqueWords = new Set(words.filter(word => word.length > 3));
+  return uniqueWords.size > 20; // At least 20 unique substantial words
+}
+
+/** Calculate metadata ratio in text */
+function calculateMetadataRatio(text: string): number {
+  const metadataKeywords = [
+    'producer', 'creator', 'creationdate', 'moddate', 
+    'pdf', 'adobe', 'version', 'trapped', 'keywords'
+  ];
+  
+  const words = text.toLowerCase().split(/\s+/);
+  const metadataWords = words.filter(word => 
+    metadataKeywords.some(keyword => word.includes(keyword))
+  );
+  
+  return metadataWords.length / Math.max(words.length, 1);
 }
 
 /** Check if text is readable (not gibberish) */
@@ -268,6 +330,20 @@ function isGibberish(text: string): boolean {
   return unusualPatterns.some(pattern => pattern.test(text));
 }
 
+/** Check if line appears to be metadata */
+function isMetadataLine(line: string): boolean {
+  const metadataIndicators = [
+    /^\d+\s+\d+\s+\w+$/, // PDF object references
+    /^<<.*>>$/, // PDF dictionaries
+    /^\/\w+/, // PDF commands
+    /^(Producer|Creator|CreationDate|ModDate):/i,
+    /^Page \d+ of \d+$/i,
+    /^\d{4}-\d{2}-\d{2}/, // Dates
+  ];
+  
+  return metadataIndicators.some(pattern => pattern.test(line.trim()));
+}
+
 /** Clean extracted text */
 function cleanExtractedText(text: string): string {
   return text
@@ -276,6 +352,8 @@ function cleanExtractedText(text: string): string {
     .replace(/(BT|ET|Tm|Td|Tj|TJ|Tf|TD|T\*)\b/g, ' ')
     .replace(/\[[^\]]*\]/g, ' ')
     .replace(/\([^)]*\)/g, ' ')
+    // Remove common metadata lines
+    .replace(/(Producer|Creator|CreationDate|ModDate|Keywords|Subject|Title|Author):.*\n/gi, '')
     // Clean up whitespace and encoding issues
     .replace(/\\[nrt]/g, ' ')
     .replace(/\\[0-9]{3}/g, ' ')

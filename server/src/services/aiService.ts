@@ -4,14 +4,11 @@ import { debugLogger } from "../utils/debugLogger.js";
 import type { Question } from "../utils/types.js";
 
 /* -------------------------------------------------- */
-/* 🧩 Chunk text using LangChain’s Recursive Splitter */
+/* 🧩 Chunk text using LangChain's Recursive Splitter */
 /* -------------------------------------------------- */
 async function chunkText(text: string, maxChars = 1500): Promise<string[]> {
-  // Clean text first to remove garbage characters
-  const cleanText = text
-    .replace(/[^\x20-\x7E\n\r\t]/g, ' ') // Remove non-printable chars
-    .replace(/\s+/g, ' ')
-    .trim();
+  // Enhanced text cleaning with metadata detection
+  const cleanText = cleanAndValidateText(text);
   
   if (cleanText.length < 100) {
     debugLogger("aiService", {
@@ -20,7 +17,7 @@ async function chunkText(text: string, maxChars = 1500): Promise<string[]> {
       cleanLength: cleanText.length,
       preview: cleanText.slice(0, 200)
     });
-    throw new Error("Extracted text is too short for quiz generation");
+    throw new Error("INVALID_CONTENT: Extracted text is too short or contains mostly metadata");
   }
 
   const splitter = new RecursiveCharacterTextSplitter({
@@ -32,7 +29,117 @@ async function chunkText(text: string, maxChars = 1500): Promise<string[]> {
 }
 
 /* -------------------------------------------------- */
-/* 🧠 Build structured prompt for Mistral             */
+/* 🧠 Enhanced text cleaning and validation           */
+/* -------------------------------------------------- */
+function cleanAndValidateText(text: string): string {
+  // Remove non-printable characters
+  let cleanText = text
+    .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Check for metadata-heavy content
+  if (isMetadataHeavy(cleanText)) {
+    debugLogger("aiService", {
+      step: "metadata-heavy-content",
+      metadataRatio: calculateMetadataRatio(cleanText),
+      preview: cleanText.slice(0, 300)
+    });
+    throw new Error("INVALID_CONTENT: Text contains mostly PDF metadata instead of educational content");
+  }
+
+  // Check for sufficient educational content
+  if (!hasSubstantialEducationalContent(cleanText)) {
+    debugLogger("aiService", {
+      step: "insufficient-educational-content",
+      wordCount: cleanText.split(/\s+/).length,
+      preview: cleanText.slice(0, 300)
+    });
+    throw new Error("INVALID_CONTENT: Insufficient educational content for quiz generation");
+  }
+
+  return cleanText;
+}
+
+/* -------------------------------------------------- */
+/* 🔍 Enhanced content validation functions           */
+/* -------------------------------------------------- */
+function isMetadataHeavy(text: string): boolean {
+  const metadataKeywords = [
+    'producer', 'creator', 'creationdate', 'moddate', 
+    'pdf', 'adobe', 'version', 'trapped', 'keywords',
+    'subject', 'title', 'author', 'page', 'pages'
+  ];
+
+  const words = text.toLowerCase().split(/\s+/);
+  const metadataWords = words.filter(word => 
+    metadataKeywords.some(keyword => word.includes(keyword))
+  );
+
+  const metadataRatio = metadataWords.length / Math.max(words.length, 1);
+  return metadataRatio > 0.2; // More than 20% metadata words
+}
+
+function calculateMetadataRatio(text: string): number {
+  const metadataKeywords = [
+    'producer', 'creator', 'creationdate', 'moddate', 
+    'pdf', 'adobe', 'version', 'trapped', 'keywords'
+  ];
+  
+  const words = text.toLowerCase().split(/\s+/);
+  const metadataWords = words.filter(word => 
+    metadataKeywords.some(keyword => word.includes(keyword))
+  );
+  
+  return metadataWords.length / Math.max(words.length, 1);
+}
+
+function hasSubstantialEducationalContent(text: string): boolean {
+  if (!text || text.length < 200) return false;
+  
+  const sentences = text.split(/[.!?]+/);
+  const substantialSentences = sentences.filter(sentence => {
+    const words = sentence.trim().split(/\s+/);
+    return words.length >= 5 && 
+           !isMetadataLine(sentence) && 
+           !isGibberish(sentence);
+  });
+
+  const lines = text.split('\n');
+  const substantialLines = lines.filter(line => {
+    const words = line.trim().split(/\s+/);
+    return words.length >= 3 && !isMetadataLine(line);
+  });
+
+  return substantialSentences.length >= 3 && substantialLines.length >= 5;
+}
+
+function isMetadataLine(line: string): boolean {
+  const metadataPatterns = [
+    /^(Producer|Creator|CreationDate|ModDate|Keywords|Subject|Title|Author):/i,
+    /^Page \d+ of \d+$/i,
+    /^\d+\s+\d+\s+\w+$/, // PDF object references
+    /^<<.*>>$/, // PDF dictionaries
+  ];
+  
+  return metadataPatterns.some(pattern => pattern.test(line.trim()));
+}
+
+function isGibberish(text: string): boolean {
+  const specialCharRatio = (text.replace(/[a-zA-Z0-9\s]/g, '').length) / text.length;
+  if (specialCharRatio > 0.4) return true;
+  
+  const unusualPatterns = [
+    /[{}<>\[\]\\\/]{3,}/g,
+    /[^\x20-\x7E]{3,}/g,
+    /(\S)\1{4,}/g,
+  ];
+  
+  return unusualPatterns.some(pattern => pattern.test(text));
+}
+
+/* -------------------------------------------------- */
+/* 🧠 Build enhanced structured prompt for Mistral    */
 /* -------------------------------------------------- */
 function buildPrompt(chunk: string, count: number, difficulty: string) {
   const difficultyNote =
@@ -42,27 +149,34 @@ function buildPrompt(chunk: string, count: number, difficulty: string) {
       ? "Make questions moderately challenging, testing comprehension."
       : "Keep questions simple and clear, testing basic recall.";
 
+  // Extract a clean sample for the prompt
+  const cleanSample = extractContentSample(chunk);
+
   return `
-You are an expert quiz generator. Create ${count} high-quality multiple-choice questions based EXCLUSIVELY on the provided text.
+You are an expert educational quiz generator. Create ${count} high-quality multiple-choice questions based EXCLUSIVELY on the provided educational content.
 
 CRITICAL REQUIREMENTS:
-1. Questions MUST be directly based on information in the text
-2. Each question must have exactly 4 plausible options (A, B, C, D)
-3. Only ONE correct answer per question
-4. Options should be clear and distinct
-5. Questions should test understanding, not just memorization
+1. Questions MUST be directly based on the educational content in the text
+2. IGNORE completely any metadata about PDF creation, software, dates, or technical details
+3. Each question must have exactly 4 plausible options (A, B, C, D)
+4. Only ONE correct answer per question
+5. Options should be clear, distinct, and plausible
+6. Questions should test conceptual understanding, not just memorization
+7. Focus on key concepts, main ideas, and important details from the content
 
 ${difficultyNote}
 
-TEXT TO USE:
+EDUCATIONAL CONTENT TO USE:
 """
-${chunk}
+${cleanSample}
 """
 
-IMPORTANT: Return ONLY a valid JSON array with this exact structure:
+IMPORTANT: If the content appears to be mostly metadata, corrupted, or non-educational, respond with exactly: "INVALID_CONTENT"
+
+OTHERWISE, return ONLY a valid JSON array with this exact structure:
 [
   {
-    "question": "Clear question based on the text",
+    "question": "Clear question based on the educational content",
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "correct": "Option A"
   }
@@ -73,10 +187,39 @@ Do not include any explanations or additional text outside the JSON array.
 }
 
 /* -------------------------------------------------- */
+/* 🔍 Extract clean content sample for prompt         */
+/* -------------------------------------------------- */
+function extractContentSample(text: string, maxLength: number = 2500): string {
+  // Split into paragraphs and filter out metadata-like paragraphs
+  const paragraphs = text.split('\n\n')
+    .filter(para => {
+      const words = para.split(/\s+/);
+      const uniqueWords = new Set(words);
+      return words.length >= 10 && 
+             uniqueWords.size > 5 &&
+             !isMetadataParagraph(para);
+    })
+    .slice(0, 10); // Take first 10 substantial paragraphs
+  
+  return paragraphs.join('\n\n').substring(0, maxLength);
+}
+
+function isMetadataParagraph(paragraph: string): boolean {
+  const metadataTerms = ['producer', 'creator', 'creationdate', 'pdf', 'version', 'adobe'];
+  const lowerPara = paragraph.toLowerCase();
+  return metadataTerms.some(term => lowerPara.includes(term));
+}
+
+/* -------------------------------------------------- */
 /* 🔍 Parse JSON output safely                        */
 /* -------------------------------------------------- */
 function safeParse(raw: string): Question[] {
   try {
+    // Check for invalid content response
+    if (raw.trim() === 'INVALID_CONTENT') {
+      throw new Error('AI detected invalid content for question generation');
+    }
+
     // More robust cleaning
     const cleaned = raw
       .replace(/```json|```/gi, "")
@@ -94,7 +237,7 @@ function safeParse(raw: string): Question[] {
       throw new Error("Response is not an array");
     }
 
-    return parsed.map((q: any, i: number) => {
+    const questions = parsed.map((q: any, i: number) => {
       // Validate question structure
       if (!q.question || !Array.isArray(q.options) || q.options.length !== 4 || !q.correct) {
         debugLogger("aiService", {
@@ -114,14 +257,61 @@ function safeParse(raw: string): Question[] {
         correctAnswer: q.correct,
       };
     }).filter(Boolean) as Question[]; // Remove null entries
+
+    // Validate question quality
+    if (!validateQuestionQuality(questions)) {
+      throw new Error('POOR_QUALITY_QUESTIONS: Questions appear to be based on metadata or poor content');
+    }
+
+    return questions;
   } catch (err) {
     debugLogger("aiService", {
       step: "parse-failed",
       rawPreview: raw.slice(0, 300),
       error: (err as Error).message,
     });
+    
+    if ((err as Error).message.includes('INVALID_CONTENT') || 
+        (err as Error).message.includes('POOR_QUALITY_QUESTIONS')) {
+      throw err; // Re-throw these specific errors
+    }
+    
     return [];
   }
+}
+
+/* -------------------------------------------------- */
+/* 🔍 Validate question quality                       */
+/* -------------------------------------------------- */
+function validateQuestionQuality(questions: Question[]): boolean {
+  if (!questions || questions.length === 0) return false;
+
+  const metadataKeywords = [
+    'pdf', 'creator', 'producer', 'adobe', 'creation date', 
+    'software', 'version', 'metadata', 'document properties'
+  ];
+
+  let qualityQuestions = 0;
+
+  for (const question of questions) {
+    const questionText = `${question.question} ${question.options?.join(' ') || ''}`.toLowerCase();
+    
+    // Check for metadata focus
+    const hasMetadataFocus = metadataKeywords.some(keyword => 
+      questionText.includes(keyword)
+    );
+
+    // Check question structure quality
+    const hasGoodStructure = question.question.length > 20 && 
+                            question.question.length < 250;
+
+    if (!hasMetadataFocus && hasGoodStructure) {
+      qualityQuestions++;
+    }
+  }
+
+  // At least 60% of questions should be quality questions
+  return qualityQuestions / questions.length >= 0.6;
 }
 
 /* -------------------------------------------------- */
@@ -235,7 +425,13 @@ export async function generateQuestionsFromText(
         chunkIndex: i,
         error: err.message,
       });
-      // Continue with next chunk instead of failing completely
+      
+      // Re-throw specific content validation errors
+      if (err.message.includes('INVALID_CONTENT') || 
+          err.message.includes('POOR_QUALITY_QUESTIONS')) {
+        throw err;
+      }
+      // Continue with next chunk for other errors
     }
   }
 
@@ -246,7 +442,7 @@ export async function generateQuestionsFromText(
   });
 
   if (questions.length === 0) {
-    throw new Error("No questions could be generated from the provided text. The text may be too short, low quality, or the AI service may be unavailable.");
+    throw new Error("No questions could be generated from the provided text. The text may be too short, low quality, or contain mostly metadata.");
   }
 
   return questions.slice(0, numQuestions);
