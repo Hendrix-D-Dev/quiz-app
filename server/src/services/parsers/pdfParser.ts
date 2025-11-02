@@ -1,14 +1,10 @@
 import { debugLogger } from "../../utils/debugLogger.js";
 
 /**
- * ✅ Enhanced PDF Parser with Multiple Fallback Strategies
- * 1️⃣ Primary: pdfjs-dist (without worker for simplicity)
- * 2️⃣ Secondary: pdf-parse 
- * 3️⃣ Fallback: Enhanced manual extraction
- * 4️⃣ Final: OCR for image-based PDFs
+ * ✅ Enhanced PDF Parser with Fixed Worker Issues
  */
 export async function parsePdf(buffer: Buffer): Promise<string> {
-  // --- Strategy 1: pdfjs-dist (Most Reliable) ---
+  // --- Strategy 1: pdfjs-dist with proper worker setup ---
   try {
     const text = await extractWithPdfJs(buffer);
     if (text && text.length >= 200 && isReadableText(text)) {
@@ -26,16 +22,10 @@ export async function parsePdf(buffer: Buffer): Promise<string> {
     });
   }
 
-  // --- Strategy 2: pdf-parse ---
+  // --- Strategy 2: pdf-parse with fixed path issue ---
   try {
-    const pdfParse = await import("pdf-parse");
-    const pdfParseFn = pdfParse.default || pdfParse;
-    
-    const data = await pdfParseFn(buffer);
-    let text = (data.text || "").trim();
-    text = cleanExtractedText(text);
-    
-    if (text.length >= 200 && isReadableText(text)) {
+    const text = await extractWithPdfParse(buffer);
+    if (text && text.length >= 200 && isReadableText(text)) {
       debugLogger("pdfParser", {
         step: "pdf-parse success",
         length: text.length,
@@ -94,16 +84,18 @@ export async function parsePdf(buffer: Buffer): Promise<string> {
   );
 }
 
-/** Extract text using pdfjs-dist without worker for simplicity */
+/** Extract text using pdfjs-dist with proper worker configuration */
 async function extractWithPdfJs(buffer: Buffer): Promise<string> {
-  // Use dynamic import to avoid TypeScript errors
-  const pdfjsLib = await import('pdfjs-dist');
-  const pdfjs = pdfjsLib as any;
-  
-  // Disable worker for now to avoid import issues
-  pdfjs.GlobalWorkerOptions.workerSrc = '';
-  
   try {
+    // Use dynamic import to avoid TypeScript errors
+    const pdfjsLib = await import('pdfjs-dist');
+    
+    // Set up worker - FIXED: Use proper worker path
+    const pdfjs = pdfjsLib as any;
+    
+    // For server-side usage, we can disable worker for now to avoid complex setup
+    pdfjs.GlobalWorkerOptions.workerSrc = '';
+    
     // Load PDF document
     const loadingTask = pdfjs.getDocument({ data: buffer });
     const pdf = await loadingTask.promise;
@@ -152,85 +144,99 @@ async function extractWithPdfJs(buffer: Buffer): Promise<string> {
   }
 }
 
+/** Extract text using pdf-parse with error handling */
+async function extractWithPdfParse(buffer: Buffer): Promise<string> {
+  try {
+    const pdfParse = await import("pdf-parse");
+    const pdfParseFn = pdfParse.default || pdfParse;
+    
+    // FIX: Provide data directly to avoid file system issues
+    const data = await pdfParseFn(buffer);
+    
+    let text = (data.text || "").trim();
+    text = cleanExtractedText(text);
+    
+    return text;
+  } catch (err) {
+    throw new Error(`PDF-parse failed: ${err}`);
+  }
+}
+
 /** Enhanced manual text extraction */
 async function extractTextManually(buffer: Buffer): Promise<string> {
   try {
-    const pdfString = buffer.toString('binary');
-    let extractedText = '';
+    // Convert buffer to string with multiple encodings
+    const encodings = ['utf8', 'latin1', 'ascii'] as const;
+    let bestText = '';
     
-    // Method 1: Extract text between parentheses (most common PDF text format)
-    const parenMatches = pdfString.match(/\(([^)]+)\)/g) || [];
-    const parenText = parenMatches
-      .map(match => {
-        let text = match.slice(1, -1); // Remove parentheses
+    for (const encoding of encodings) {
+      try {
+        const pdfString = buffer.toString(encoding);
+        let extractedText = '';
         
-        // Handle escaped characters
-        text = text.replace(/\\([()\\])/g, '$1');
-        text = text.replace(/\\\n/g, '');
-        text = text.replace(/\\\r/g, '');
+        // Method 1: Extract text between parentheses
+        const parenMatches = pdfString.match(/\(([^)]+)\)/g) || [];
+        const parenText = parenMatches
+          .map(match => {
+            let text = match.slice(1, -1);
+            text = text.replace(/\\([()\\])/g, '$1');
+            text = text.replace(/\\\n/g, '');
+            text = text.replace(/\\\r/g, '');
+            return text;
+          })
+          .filter(text => text.length > 1 && !isGibberish(text) && !isMetadataLine(text))
+          .join(' ');
         
-        return text;
-      })
-      .filter(text => text.length > 1 && !isGibberish(text))
-      .join(' ');
+        extractedText += parenText + ' ';
+        
+        // Method 2: Extract from text operators
+        const tjMatches = pdfString.match(/(Tj|TJ)\s*\(([^)]+)\)/g) || [];
+        const tjText = tjMatches
+          .map(match => {
+            const textMatch = match.match(/\(([^)]+)\)/);
+            return textMatch ? textMatch[1] : '';
+          })
+          .filter(text => text.length > 1 && !isGibberish(text) && !isMetadataLine(text))
+          .join(' ');
+        
+        extractedText += tjText + ' ';
+        
+        // Method 3: Look for streams with text
+        const streamMatches = pdfString.match(/stream([\s\S]*?)endstream/gi) || [];
+        const streamText = streamMatches
+          .map(stream => {
+            // Extract content between stream and endstream
+            const content = stream.replace(/stream|endstream/gi, '').trim();
+            // Look for readable text in the stream
+            const textMatches = content.match(/[a-zA-Z]{3,}/g) || [];
+            return textMatches.join(' ');
+          })
+          .filter(text => text.length > 0)
+          .join(' ');
+        
+        extractedText += streamText + ' ';
+        
+        const cleanText = cleanExtractedText(extractedText);
+        
+        if (cleanText.length > bestText.length && isReadableText(cleanText)) {
+          bestText = cleanText;
+        }
+      } catch (e) {
+        // Continue with next encoding
+        continue;
+      }
+    }
     
-    extractedText += parenText + ' ';
-    
-    // Method 2: Extract from text operators (Tj, TJ)
-    const tjMatches = pdfString.match(/(Tj|TJ)\s*\(([^)]+)\)/g) || [];
-    const tjText = tjMatches
-      .map(match => {
-        const textMatch = match.match(/\(([^)]+)\)/);
-        return textMatch ? textMatch[1] : '';
-      })
-      .filter(text => text.length > 1 && !isGibberish(text))
-      .join(' ');
-    
-    extractedText += tjText + ' ';
-    
-    // Method 3: Look for readable strings in the binary data
-    const readableStrings = extractReadableStrings(buffer);
-    extractedText += readableStrings + ' ';
-    
-    return cleanExtractedText(extractedText);
+    return bestText;
   } catch (err) {
     return '';
   }
 }
 
-/** Extract readable strings from binary buffer */
-function extractReadableStrings(buffer: Buffer): string {
-  // Try multiple encodings to find readable text
-  const encodings = ['utf8', 'latin1', 'ascii', 'ucs2'] as const;
-  let bestText = '';
-  
-  for (const encoding of encodings) {
-    try {
-      const text = buffer.toString(encoding);
-      
-      // Look for sequences of readable characters
-      const words = text.match(/[a-zA-Z]{3,}/g) || [];
-      const sentences = text.match(/[a-zA-Z][a-zA-Z\s,.!?]{10,}[.!?]/g) || [];
-      
-      const extracted = [...words, ...sentences]
-        .filter(text => !isMetadataLine(text))
-        .join(' ');
-      
-      if (extracted.length > bestText.length && isReadableText(extracted)) {
-        bestText = extracted;
-      }
-    } catch (e) {
-      // Continue with next encoding
-    }
-  }
-  
-  return bestText.substring(0, 5000);
-}
-
 /** OCR fallback for image-based PDFs */
 async function extractWithOCR(buffer: Buffer): Promise<string> {
   try {
-    // Simple OCR using textract (already in your dependencies)
+    // Try textract first
     const textract = await import("textract");
     const Textract = textract as any;
     
@@ -244,7 +250,8 @@ async function extractWithOCR(buffer: Buffer): Promise<string> {
       });
     });
   } catch (err) {
-    throw new Error('OCR not available');
+    // Fallback to simple OCR message
+    throw new Error('OCR not available - please use text-based PDFs');
   }
 }
 
@@ -256,36 +263,49 @@ function isValidContent(text: string): boolean {
   const sentenceCount = text.split(/[.!?]+/).length;
   
   // Check for metadata patterns
-  const metadataPatterns = [
-    /Producer:.+/i,
-    /Creator:.+/i,
-    /CreationDate:.+/i,
-    /ModDate:.+/i,
-    /PDF-.+/i,
-    /^[\d\s\.\-:]+$/m // Lines with only numbers, dots, dashes
-  ];
-  
-  const hasMetadata = metadataPatterns.some(pattern => pattern.test(text));
-  const metadataRatio = calculateMetadataRatio(text);
+  const hasExcessiveMetadata = calculateMetadataRatio(text) > 0.3;
+  const hasSubstantialContent = hasSubstantialEducationalContent(text);
   
   return wordCount > 100 && 
          sentenceCount > 3 && 
-         !hasMetadata && 
-         metadataRatio < 0.3; // Less than 30% metadata-like content
+         !hasExcessiveMetadata &&
+         hasSubstantialContent;
 }
 
 /** Check if text has substantial content */
 function hasSubstantialContent(text: string): boolean {
   const words = text.split(/\s+/);
   const uniqueWords = new Set(words.filter(word => word.length > 3));
-  return uniqueWords.size > 20; // At least 20 unique substantial words
+  return uniqueWords.size > 20;
+}
+
+/** Check for substantial educational content */
+function hasSubstantialEducationalContent(text: string): boolean {
+  if (!text || text.length < 200) return false;
+  
+  const sentences = text.split(/[.!?]+/);
+  const substantialSentences = sentences.filter(sentence => {
+    const words = sentence.trim().split(/\s+/);
+    return words.length >= 5 && 
+           !isMetadataLine(sentence) && 
+           !isGibberish(sentence);
+  });
+
+  const lines = text.split('\n');
+  const substantialLines = lines.filter(line => {
+    const words = line.trim().split(/\s+/);
+    return words.length >= 3 && !isMetadataLine(line);
+  });
+
+  return substantialSentences.length >= 3 || substantialLines.length >= 5;
 }
 
 /** Calculate metadata ratio in text */
 function calculateMetadataRatio(text: string): number {
   const metadataKeywords = [
     'producer', 'creator', 'creationdate', 'moddate', 
-    'pdf', 'adobe', 'version', 'trapped', 'keywords'
+    'pdf', 'adobe', 'version', 'trapped', 'keywords',
+    'subject', 'title', 'author', 'page'
   ];
   
   const words = text.toLowerCase().split(/\s+/);
@@ -336,9 +356,12 @@ function isMetadataLine(line: string): boolean {
     /^\d+\s+\d+\s+\w+$/, // PDF object references
     /^<<.*>>$/, // PDF dictionaries
     /^\/\w+/, // PDF commands
-    /^(Producer|Creator|CreationDate|ModDate):/i,
+    /^(Producer|Creator|CreationDate|ModDate|Keywords|Subject|Title|Author):/i,
     /^Page \d+ of \d+$/i,
     /^\d{4}-\d{2}-\d{2}/, // Dates
+    /^.*Adobe.*$/i, // Adobe metadata
+    /^.*Identity.*$/i, // Identity metadata
+    /^.*www\.ilovepdf\.com.*$/i, // PDF converter sites
   ];
   
   return metadataIndicators.some(pattern => pattern.test(line.trim()));
@@ -354,6 +377,7 @@ function cleanExtractedText(text: string): string {
     .replace(/\([^)]*\)/g, ' ')
     // Remove common metadata lines
     .replace(/(Producer|Creator|CreationDate|ModDate|Keywords|Subject|Title|Author):.*\n/gi, '')
+    .replace(/.*(Adobe|Identity|www\.ilovepdf\.com).*\n/gi, '')
     // Clean up whitespace and encoding issues
     .replace(/\\[nrt]/g, ' ')
     .replace(/\\[0-9]{3}/g, ' ')

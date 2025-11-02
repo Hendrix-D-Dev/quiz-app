@@ -7,17 +7,17 @@ import type { Question } from "../utils/types.js";
 /* 🧩 Chunk text using LangChain's Recursive Splitter */
 /* -------------------------------------------------- */
 async function chunkText(text: string, maxChars = 1500): Promise<string[]> {
-  // Enhanced text cleaning with metadata detection
+  // Enhanced text cleaning with better metadata handling
   const cleanText = cleanAndValidateText(text);
   
-  if (cleanText.length < 100) {
+  if (cleanText.length < 50) { // Reduced from 100 to be more lenient
     debugLogger("aiService", {
       step: "text-too-short",
       originalLength: text.length,
       cleanLength: cleanText.length,
       preview: cleanText.slice(0, 200)
     });
-    throw new Error("INVALID_CONTENT: Extracted text is too short or contains mostly metadata");
+    throw new Error("INVALID_CONTENT: Extracted text is too short for quiz generation");
   }
 
   const splitter = new RecursiveCharacterTextSplitter({
@@ -32,23 +32,36 @@ async function chunkText(text: string, maxChars = 1500): Promise<string[]> {
 /* 🧠 Enhanced text cleaning and validation           */
 /* -------------------------------------------------- */
 function cleanAndValidateText(text: string): string {
+  if (!text || text.trim().length === 0) {
+    throw new Error("INVALID_CONTENT: No text content extracted");
+  }
+
   // Remove non-printable characters
   let cleanText = text
     .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Check for metadata-heavy content
-  if (isMetadataHeavy(cleanText)) {
+  // Check for metadata-heavy content (but be more lenient)
+  const metadataRatio = calculateMetadataRatio(cleanText);
+  if (metadataRatio > 0.4) { // Increased threshold from 0.2 to 0.4
     debugLogger("aiService", {
       step: "metadata-heavy-content",
-      metadataRatio: calculateMetadataRatio(cleanText),
+      metadataRatio: metadataRatio,
       preview: cleanText.slice(0, 300)
     });
-    throw new Error("INVALID_CONTENT: Text contains mostly PDF metadata instead of educational content");
+    
+    // Instead of throwing, try to clean it more aggressively
+    cleanText = aggressiveCleanText(cleanText);
+    
+    // Re-check after aggressive cleaning
+    const newMetadataRatio = calculateMetadataRatio(cleanText);
+    if (newMetadataRatio > 0.3) {
+      throw new Error("INVALID_CONTENT: Text contains mostly PDF metadata instead of educational content");
+    }
   }
 
-  // Check for sufficient educational content
+  // Check for sufficient educational content (more lenient)
   if (!hasSubstantialEducationalContent(cleanText)) {
     debugLogger("aiService", {
       step: "insufficient-educational-content",
@@ -62,56 +75,58 @@ function cleanAndValidateText(text: string): string {
 }
 
 /* -------------------------------------------------- */
-/* 🔍 Enhanced content validation functions           */
+/* 🔍 Aggressive text cleaning for problematic PDFs   */
 /* -------------------------------------------------- */
-function isMetadataHeavy(text: string): boolean {
-  const metadataKeywords = [
-    'producer', 'creator', 'creationdate', 'moddate', 
-    'pdf', 'adobe', 'version', 'trapped', 'keywords',
-    'subject', 'title', 'author', 'page', 'pages'
-  ];
-
-  const words = text.toLowerCase().split(/\s+/);
-  const metadataWords = words.filter(word => 
-    metadataKeywords.some(keyword => word.includes(keyword))
-  );
-
-  const metadataRatio = metadataWords.length / Math.max(words.length, 1);
-  return metadataRatio > 0.2; // More than 20% metadata words
+function aggressiveCleanText(text: string): string {
+  return text
+    // Remove lines with common metadata patterns
+    .split('\n')
+    .filter(line => !isMetadataLine(line))
+    .join('\n')
+    // Remove specific PDF artifacts
+    .replace(/(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2})/g, '')
+    .replace(/(\+00'00'|Z)/g, '')
+    .replace(/(www\.|http[s]?:\/\/).*?(?=\s|$)/g, '')
+    .replace(/\b(Adobe|Identity|PDF|CRH|G|cJ|rJ9|USER)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
+/* -------------------------------------------------- */
+/* 🔍 Enhanced content validation functions           */
+/* -------------------------------------------------- */
 function calculateMetadataRatio(text: string): number {
   const metadataKeywords = [
     'producer', 'creator', 'creationdate', 'moddate', 
-    'pdf', 'adobe', 'version', 'trapped', 'keywords'
+    'pdf', 'adobe', 'version', 'trapped', 'keywords',
+    'subject', 'title', 'author', 'page', 'pages',
+    'identity', 'crh', 'g', 'cj', 'rj9', 'user', 'ilovepdf'
   ];
   
   const words = text.toLowerCase().split(/\s+/);
+  if (words.length === 0) return 0;
+  
   const metadataWords = words.filter(word => 
     metadataKeywords.some(keyword => word.includes(keyword))
   );
   
-  return metadataWords.length / Math.max(words.length, 1);
+  return metadataWords.length / words.length;
 }
 
 function hasSubstantialEducationalContent(text: string): boolean {
-  if (!text || text.length < 200) return false;
+  if (!text || text.length < 100) return false; // Reduced from 200
   
-  const sentences = text.split(/[.!?]+/);
-  const substantialSentences = sentences.filter(sentence => {
-    const words = sentence.trim().split(/\s+/);
-    return words.length >= 5 && 
-           !isMetadataLine(sentence) && 
-           !isGibberish(sentence);
-  });
-
-  const lines = text.split('\n');
-  const substantialLines = lines.filter(line => {
-    const words = line.trim().split(/\s+/);
-    return words.length >= 3 && !isMetadataLine(line);
-  });
-
-  return substantialSentences.length >= 3 && substantialLines.length >= 5;
+  // Count substantial words (longer than 3 characters)
+  const words = text.split(/\s+/).filter(word => word.length > 3);
+  const uniqueWords = new Set(words);
+  
+  // Count sentences
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 10);
+  
+  // More lenient criteria
+  return words.length >= 50 || // At least 50 substantial words
+         uniqueWords.size >= 20 || // Or 20 unique words  
+         sentences.length >= 2; // Or 2 sentences
 }
 
 function isMetadataLine(line: string): boolean {
@@ -120,6 +135,10 @@ function isMetadataLine(line: string): boolean {
     /^Page \d+ of \d+$/i,
     /^\d+\s+\d+\s+\w+$/, // PDF object references
     /^<<.*>>$/, // PDF dictionaries
+    /^.*Adobe.*$/i,
+    /^.*Identity.*$/i,
+    /^.*www\.ilovepdf\.com.*$/i,
+    /^\d{4}-\d{2}-\d{2}.*$/i, // Dates
   ];
   
   return metadataPatterns.some(pattern => pattern.test(line.trim()));
@@ -195,19 +214,23 @@ function extractContentSample(text: string, maxLength: number = 2500): string {
     .filter(para => {
       const words = para.split(/\s+/);
       const uniqueWords = new Set(words);
-      return words.length >= 10 && 
-             uniqueWords.size > 5 &&
+      return words.length >= 5 && // Reduced from 10
+             uniqueWords.size > 3 && // Reduced from 5
              !isMetadataParagraph(para);
     })
     .slice(0, 10); // Take first 10 substantial paragraphs
   
-  return paragraphs.join('\n\n').substring(0, maxLength);
+  const sample = paragraphs.join('\n\n').substring(0, maxLength);
+  
+  // If we have very little content after filtering, use the original text
+  return sample.length > 100 ? sample : text.substring(0, maxLength);
 }
 
 function isMetadataParagraph(paragraph: string): boolean {
-  const metadataTerms = ['producer', 'creator', 'creationdate', 'pdf', 'version', 'adobe'];
+  const metadataTerms = ['producer', 'creator', 'creationdate', 'pdf', 'version', 'adobe', 'identity'];
   const lowerPara = paragraph.toLowerCase();
-  return metadataTerms.some(term => lowerPara.includes(term));
+  const metadataCount = metadataTerms.filter(term => lowerPara.includes(term)).length;
+  return metadataCount >= 2; // Only filter if multiple metadata terms
 }
 
 /* -------------------------------------------------- */
@@ -258,7 +281,7 @@ function safeParse(raw: string): Question[] {
       };
     }).filter(Boolean) as Question[]; // Remove null entries
 
-    // Validate question quality
+    // Validate question quality (more lenient)
     if (!validateQuestionQuality(questions)) {
       throw new Error('POOR_QUALITY_QUESTIONS: Questions appear to be based on metadata or poor content');
     }
@@ -281,7 +304,7 @@ function safeParse(raw: string): Question[] {
 }
 
 /* -------------------------------------------------- */
-/* 🔍 Validate question quality                       */
+/* 🔍 Validate question quality (more lenient)        */
 /* -------------------------------------------------- */
 function validateQuestionQuality(questions: Question[]): boolean {
   if (!questions || questions.length === 0) return false;
@@ -302,7 +325,7 @@ function validateQuestionQuality(questions: Question[]): boolean {
     );
 
     // Check question structure quality
-    const hasGoodStructure = question.question.length > 20 && 
+    const hasGoodStructure = question.question.length > 15 && // Reduced from 20
                             question.question.length < 250;
 
     if (!hasMetadataFocus && hasGoodStructure) {
@@ -310,8 +333,8 @@ function validateQuestionQuality(questions: Question[]): boolean {
     }
   }
 
-  // At least 60% of questions should be quality questions
-  return qualityQuestions / questions.length >= 0.6;
+  // More lenient: At least 40% of questions should be quality questions (reduced from 60%)
+  return qualityQuestions / questions.length >= 0.4;
 }
 
 /* -------------------------------------------------- */
