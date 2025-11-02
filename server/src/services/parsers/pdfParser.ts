@@ -1,28 +1,46 @@
 import { debugLogger } from "../../utils/debugLogger.js";
 
 /**
- * ✅ Enhanced PDF Parser with iLovePDF API Integration
+ * ✅ Enhanced PDF Parser with Fixed iLovePDF Integration
  */
 export async function parsePdf(buffer: Buffer): Promise<string> {
-  // --- Strategy 1: Local parsing first (fast & free) ---
+  // --- Strategy 1: Simple PDF.js without worker (most reliable) ---
   try {
-    const localText = await extractWithLocalMethods(buffer);
-    if (localText && isValidContent(localText)) {
+    const text = await extractWithSimplePdfJs(buffer);
+    if (text && isValidContent(text)) {
       debugLogger("pdfParser", {
-        step: "local extraction success",
-        length: localText.length,
-        preview: localText.slice(0, 150),
+        step: "simple pdfjs success",
+        length: text.length,
+        preview: text.slice(0, 150),
       });
-      return localText;
+      return text;
     }
   } catch (err) {
     debugLogger("pdfParser", { 
-      step: "local extraction failed", 
+      step: "simple pdfjs failed", 
       error: String(err) 
     });
   }
 
-  // --- Strategy 2: iLovePDF API Fallback (reliable but limited) ---
+  // --- Strategy 2: pdf-parse with error handling ---
+  try {
+    const text = await extractWithPdfParseSafe(buffer);
+    if (text && isValidContent(text)) {
+      debugLogger("pdfParser", {
+        step: "pdf-parse success",
+        length: text.length,
+        preview: text.slice(0, 150),
+      });
+      return text;
+    }
+  } catch (err) {
+    debugLogger("pdfParser", { 
+      step: "pdf-parse failed", 
+      error: String(err) 
+    });
+  }
+
+  // --- Strategy 3: iLovePDF API Fallback (correct tool name) ---
   try {
     const apiText = await extractWithILovePdfApi(buffer);
     if (apiText && isValidContent(apiText)) {
@@ -46,62 +64,35 @@ export async function parsePdf(buffer: Buffer): Promise<string> {
   );
 }
 
-/** Try local extraction methods first */
-async function extractWithLocalMethods(buffer: Buffer): Promise<string> {
-  // Try pdfjs-dist first
+/** Simple PDF.js extraction without complex worker setup */
+async function extractWithSimplePdfJs(buffer: Buffer): Promise<string> {
   try {
-    const text = await extractWithPdfJs(buffer);
-    if (text && isValidContent(text)) {
-      return text;
-    }
-  } catch (err) {
-    debugLogger("pdfParser", { 
-      step: "pdfjs-dist failed", 
-      error: String(err) 
-    });
-  }
-
-  // Try pdf-parse as fallback
-  try {
-    const text = await extractWithPdfParse(buffer);
-    if (text && isValidContent(text)) {
-      return text;
-    }
-  } catch (err) {
-    debugLogger("pdfParser", { 
-      step: "pdf-parse failed", 
-      error: String(err) 
-    });
-  }
-
-  throw new Error('All local extraction methods failed');
-}
-
-/** Extract text using pdfjs-dist */
-async function extractWithPdfJs(buffer: Buffer): Promise<string> {
-  try {
+    // Use a simpler approach with pdfjs-dist
     const pdfjsLib = await import('pdfjs-dist');
+    
+    // For server-side, use the built-in version without worker
     const pdfjs = pdfjsLib as any;
-    pdfjs.GlobalWorkerOptions.workerSrc = '';
     
-    const loadingTask = pdfjs.getDocument({ data: buffer });
-    const pdf = await loadingTask.promise;
-    
+    // Use a simpler loading approach
+    const doc = await pdfjs.getDocument({
+      data: buffer,
+      useWorker: false, // Disable worker for server-side
+      verbosity: 0
+    }).promise;
+
     let fullText = '';
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    
+    for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
       try {
-        const page = await pdf.getPage(pageNum);
+        const page = await doc.getPage(pageNum);
         const textContent = await page.getTextContent();
+        
         const pageText = textContent.items
           .map((item: any) => item.str || '')
           .join(' ')
           .trim();
+          
         fullText += pageText + '\n\n';
-        
-        // Early validation for poor content
-        if (pageNum === 3 && !hasSubstantialContent(fullText)) {
-          throw new Error('Insufficient content in first few pages');
-        }
       } catch (pageErr) {
         debugLogger("pdfParser", {
           step: "page extraction failed",
@@ -112,27 +103,38 @@ async function extractWithPdfJs(buffer: Buffer): Promise<string> {
       }
     }
     
-    await pdf.destroy();
+    await doc.destroy();
     return cleanExtractedText(fullText);
   } catch (err) {
     throw new Error(`PDF.js extraction failed: ${err}`);
   }
 }
 
-/** Extract text using pdf-parse */
-async function extractWithPdfParse(buffer: Buffer): Promise<string> {
+/** Safe pdf-parse extraction with error handling */
+async function extractWithPdfParseSafe(buffer: Buffer): Promise<string> {
   try {
     const pdfParse = await import("pdf-parse");
     const pdfParseFn = pdfParse.default || pdfParse;
+    
+    // FIXED: Only pass one argument to avoid TypeScript error
     const data = await pdfParseFn(buffer);
+    
     let text = (data.text || "").trim();
     return cleanExtractedText(text);
-  } catch (err) {
+  } catch (err: any) {
+    // Check if it's the test file error and ignore it
+    if (err.message && err.message.includes('test/data')) {
+      debugLogger("pdfParser", {
+        step: "pdf-parse test file error (ignored)",
+        error: String(err)
+      });
+      throw new Error('PDF-parse configuration issue');
+    }
     throw new Error(`PDF-parse failed: ${err}`);
   }
 }
 
-/** Extract text using iLovePDF API */
+/** Extract text using iLovePDF API with correct tool name */
 async function extractWithILovePdfApi(buffer: Buffer): Promise<string> {
   // Check if API keys are configured
   if (!process.env.ILOVEPDF_PUBLIC_KEY || !process.env.ILOVEPDF_SECRET_KEY) {
@@ -150,7 +152,7 @@ async function extractWithILovePdfApi(buffer: Buffer): Promise<string> {
       publicKey: process.env.ILOVEPDF_PUBLIC_KEY?.substring(0, 10) + '...'
     });
 
-    // Use REST API approach (more reliable than SDK)
+    // Use REST API approach with correct tool name
     const text = await extractWithILovePdfRestApi(buffer);
     return cleanExtractedText(text);
 
@@ -163,13 +165,15 @@ async function extractWithILovePdfApi(buffer: Buffer): Promise<string> {
   }
 }
 
-/** iLovePDF REST API implementation */
+/** iLovePDF REST API implementation with correct tool name */
 async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
   const fetch = await import('node-fetch').then(module => module.default);
   const FormData = await import('form-data').then(module => module.default);
 
   const publicKey = process.env.ILOVEPDF_PUBLIC_KEY!;
   const secretKey = process.env.ILOVEPDF_SECRET_KEY!;
+
+  debugLogger("pdfParser", { step: "starting iLovePDF authentication" });
 
   // 1. Get authentication token
   const authResponse = await fetch('https://api.ilovepdf.com/v1/auth', {
@@ -192,8 +196,8 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
 
   debugLogger("pdfParser", { step: "iLovePDF authenticated", token: token.substring(0, 10) + '...' });
 
-  // 2. Start a new task
-  const taskResponse = await fetch('https://api.ilovepdf.com/v1/start/pdfextract', {
+  // 2. Start a new task with CORRECT tool name
+  const taskResponse = await fetch('https://api.ilovepdf.com/v1/start/extract', {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -202,6 +206,11 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
 
   if (!taskResponse.ok) {
     const errorText = await taskResponse.text();
+    debugLogger("pdfParser", {
+      step: "iLovePDF task start failed",
+      status: taskResponse.status,
+      error: errorText
+    });
     throw new Error(`iLovePDF task start failed: ${taskResponse.status} - ${errorText}`);
   }
 
@@ -234,7 +243,7 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
 
   debugLogger("pdfParser", { step: "iLovePDF file uploaded", serverFilename });
 
-  // 4. Process the file
+  // 4. Process the file with CORRECT tool name
   const processResponse = await fetch(`https://${server}/v1/process`, {
     method: 'POST',
     headers: {
@@ -243,7 +252,7 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
     },
     body: JSON.stringify({
       task: taskId,
-      tool: 'pdfextract',
+      tool: 'extract', // CORRECT tool name
       files: [
         {
           server_filename: serverFilename,
@@ -287,20 +296,13 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
 
 /** Enhanced content validation */
 function isValidContent(text: string): boolean {
-  if (!text || text.length < 100) return false;
+  if (!text || text.length < 50) return false;
   
   const wordCount = text.split(/\s+/).length;
   const metadataRatio = calculateMetadataRatio(text);
   
-  // More lenient validation for iLovePDF results
-  return wordCount > 50 && metadataRatio < 0.5;
-}
-
-/** Check if text has substantial content */
-function hasSubstantialContent(text: string): boolean {
-  const words = text.split(/\s+/);
-  const uniqueWords = new Set(words.filter(word => word.length > 3));
-  return uniqueWords.size > 20;
+  // More lenient validation
+  return wordCount > 30 && metadataRatio < 0.6;
 }
 
 /** Calculate metadata ratio in text */
@@ -312,11 +314,20 @@ function calculateMetadataRatio(text: string): number {
   ];
   
   const words = text.toLowerCase().split(/\s+/);
+  if (words.length === 0) return 0;
+  
   const metadataWords = words.filter(word => 
     metadataKeywords.some(keyword => word.includes(keyword))
   );
   
-  return metadataWords.length / Math.max(words.length, 1);
+  return metadataWords.length / words.length;
+}
+
+/** Check if text has substantial content */
+function hasSubstantialContent(text: string): boolean {
+  const words = text.split(/\s+/);
+  const uniqueWords = new Set(words.filter(word => word.length > 3));
+  return uniqueWords.size > 15;
 }
 
 /** Check if text is readable (not gibberish) */
@@ -331,13 +342,13 @@ function isReadableText(text: string): boolean {
   
   const hasGibberish = isGibberish(text);
   
-  return readabilityScore > 0.6 && wordRatio > 0.3 && !hasGibberish;
+  return readabilityScore > 0.5 && wordRatio > 0.2 && !hasGibberish;
 }
 
 /** Detect gibberish text */
 function isGibberish(text: string): boolean {
   const specialCharRatio = (text.replace(/[a-zA-Z0-9\s]/g, '').length) / text.length;
-  if (specialCharRatio > 0.4) return true;
+  if (specialCharRatio > 0.5) return true;
   
   const unusualPatterns = [
     /[{}<>\[\]\\\/]{3,}/g,
@@ -348,32 +359,18 @@ function isGibberish(text: string): boolean {
   return unusualPatterns.some(pattern => pattern.test(text));
 }
 
-/** Check if line appears to be metadata */
-function isMetadataLine(line: string): boolean {
-  const metadataIndicators = [
-    /^\d+\s+\d+\s+\w+$/,
-    /^<<.*>>$/,
-    /^\/\w+/,
-    /^(Producer|Creator|CreationDate|ModDate|Keywords|Subject|Title|Author):/i,
-    /^Page \d+ of \d+$/i,
-    /^\d{4}-\d{2}-\d{2}/,
-    /^.*Adobe.*$/i,
-    /^.*Identity.*$/i,
-    /^.*www\.ilovepdf\.com.*$/i,
-  ];
-  
-  return metadataIndicators.some(pattern => pattern.test(line.trim()));
-}
-
 /** Clean extracted text */
 function cleanExtractedText(text: string): string {
   return text
+    // Remove PDF artifacts and operators
     .replace(/\/(Font|F|Type|Subtype|BaseFont|Encoding)\s*\[?[^\s\]]*\]?/g, ' ')
     .replace(/(BT|ET|Tm|Td|Tj|TJ|Tf|TD|T\*)\b/g, ' ')
     .replace(/\[[^\]]*\]/g, ' ')
     .replace(/\([^)]*\)/g, ' ')
+    // Remove common metadata lines
     .replace(/(Producer|Creator|CreationDate|ModDate|Keywords|Subject|Title|Author):.*\n/gi, '')
     .replace(/.*(Adobe|Identity|www\.ilovepdf\.com).*\n/gi, '')
+    // Clean up whitespace and encoding issues
     .replace(/\\[nrt]/g, ' ')
     .replace(/\\[0-9]{3}/g, ' ')
     .replace(/�/g, ' ')

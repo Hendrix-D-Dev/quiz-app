@@ -14,21 +14,26 @@ const UploadForm = ({ onUploadComplete }: Props) => {
   const [loading, setLoading] = useState(false);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [showSelector, setShowSelector] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
       setFile(selectedFile);
-      // Clear text when file is selected
       setText("");
+      setError(null); // Clear previous errors when new file is selected
     }
   };
 
   const handleExtractChapters = async () => {
     if (!file) return alert("Please upload a file first.");
+    
     setLoading(true);
+    setError(null);
+    
     try {
       const result = await extractChapters(file);
+      
       if (result.fallback && result.text) {
         const useFallback = confirm(
           "No chapters were detected. Would you like to divide the document into quarters and pick one for the quiz?"
@@ -44,14 +49,24 @@ const UploadForm = ({ onUploadComplete }: Props) => {
         }
       }
 
-      if (result.chapters.length <= 1) await handleSubmitCore();
-      else {
+      if (result.chapters.length <= 1) {
+        await handleSubmitCore();
+      } else {
         setChapters(result.chapters);
         setShowSelector(true);
       }
     } catch (err: any) {
       console.error("❌ Chapter extraction error:", err);
-      alert(err.message || "Could not extract chapters from this document.");
+      const errorMessage = err.message || "Could not extract chapters from this document.";
+      setError(errorMessage);
+      
+      // Special handling for PDF content errors
+      if (errorMessage.includes('PDF_CONTENT_ERROR') || errorMessage.includes('image-based') || errorMessage.includes('scanned')) {
+        setError(
+          "This PDF appears to be image-based or scanned. " +
+          "Please try a PDF with selectable text, or use DOCX/TXT format for best results."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -75,6 +90,8 @@ const UploadForm = ({ onUploadComplete }: Props) => {
 
   const handleSubmitCore = async (selectedIndexes?: number[]) => {
     setLoading(true);
+    setError(null);
+    
     try {
       const formData = new FormData();
       if (file) formData.append("file", file);
@@ -98,13 +115,34 @@ const UploadForm = ({ onUploadComplete }: Props) => {
 
       const questions = res.data?.questions || [];
       if (!questions.length) {
-        alert("No questions were generated from the selected content.");
-        return onUploadComplete([]);
+        setError("No questions were generated from the selected content. The text might be too short or not suitable for quiz generation.");
+        return;
       }
+      
       onUploadComplete(questions);
     } catch (err: any) {
       console.error("❌ Upload error:", err);
-      alert(err?.response?.data?.error || "Error generating quiz");
+      const errorMessage = err?.response?.data?.error || err.message || "Error generating quiz";
+      setError(errorMessage);
+      
+      // Enhanced error handling for specific cases
+      if (errorMessage.includes('PDF_CONTENT_ERROR')) {
+        setError(
+          "We couldn't extract readable text from this PDF. " +
+          "This might be a scanned document or image-based PDF. " +
+          "Please try a text-based PDF, DOCX, or paste the text directly."
+        );
+      } else if (errorMessage.includes('INVALID_CONTENT') || errorMessage.includes('mostly metadata')) {
+        setError(
+          "The document contains mostly technical metadata instead of educational content. " +
+          "Please try a different document with substantial text content."
+        );
+      } else if (errorMessage.includes('too short') || errorMessage.includes('insufficient content')) {
+        setError(
+          "The document doesn't contain enough text for quiz generation. " +
+          "Please use a document with more substantial educational content."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -113,16 +151,28 @@ const UploadForm = ({ onUploadComplete }: Props) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file && !text.trim()) {
-      return alert("Please upload a file or paste some text.");
+      setError("Please upload a file or paste some text.");
+      return;
     }
-    if (file) await handleExtractChapters();
-    else await handleSubmitCore();
+    
+    setError(null);
+    
+    if (file) {
+      await handleExtractChapters();
+    } else {
+      await handleSubmitCore();
+    }
   };
 
   const removeFile = () => {
     setFile(null);
+    setError(null);
     const fileInput = document.getElementById("file-upload") as HTMLInputElement;
     if (fileInput) fileInput.value = "";
+  };
+
+  const clearError = () => {
+    setError(null);
   };
 
   return (
@@ -144,6 +194,30 @@ const UploadForm = ({ onUploadComplete }: Props) => {
           </h2>
           <p className="text-slate-600">Upload a document or paste text to create your quiz</p>
         </div>
+
+        {/* Error Display */}
+        {error && (
+          <div className="flex items-start justify-between p-4 bg-red-50 border border-red-200 rounded-xl animate-fade-in">
+            <div className="flex items-start space-x-3 flex-1">
+              <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="text-sm text-red-800">
+                <p className="font-semibold mb-1">Processing Issue</p>
+                <p>{error}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={clearError}
+              className="p-1 hover:bg-red-100 rounded transition-colors flex-shrink-0"
+            >
+              <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
 
         {/* File Upload Section */}
         <div className="space-y-4">
@@ -226,6 +300,7 @@ const UploadForm = ({ onUploadComplete }: Props) => {
               value={text}
               onChange={(e) => {
                 setText(e.target.value);
+                setError(null);
                 // Clear file when text is entered
                 if (e.target.value.trim()) setFile(null);
               }}
@@ -271,7 +346,7 @@ const UploadForm = ({ onUploadComplete }: Props) => {
         <button
           type="submit"
           disabled={loading || (!file && !text.trim())}
-          className="w-full btn-primary py-4 text-lg relative overflow-hidden group"
+          className="w-full btn-primary py-4 text-lg relative overflow-hidden group disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? (
             <span className="flex items-center justify-center space-x-3">
