@@ -1,12 +1,15 @@
 import { debugLogger } from "../../utils/debugLogger.js";
 
 /**
- * ✅ Enhanced PDF Parser with Fixed iLovePDF Integration
+ * ✅ Enhanced PDF Parser with Image-Based PDF Detection
  */
 export async function parsePdf(buffer: Buffer): Promise<string> {
-  // --- Strategy 1: Simple PDF.js without worker (most reliable) ---
+  // Convert Buffer to Uint8Array for PDF.js
+  const uint8Array = new Uint8Array(buffer);
+
+  // --- Strategy 1: Simple PDF.js with Uint8Array ---
   try {
-    const text = await extractWithSimplePdfJs(buffer);
+    const text = await extractWithSimplePdfJs(uint8Array);
     if (text && isValidContent(text)) {
       debugLogger("pdfParser", {
         step: "simple pdfjs success",
@@ -40,7 +43,7 @@ export async function parsePdf(buffer: Buffer): Promise<string> {
     });
   }
 
-  // --- Strategy 3: iLovePDF API Fallback (correct tool name) ---
+  // --- Strategy 3: iLovePDF API Fallback ---
   try {
     const apiText = await extractWithILovePdfApi(buffer);
     if (apiText && isValidContent(apiText)) {
@@ -59,30 +62,28 @@ export async function parsePdf(buffer: Buffer): Promise<string> {
   }
 
   throw new Error(
-    "PDF_CONTENT_ERROR: This PDF could not be processed. " +
-    "Please ensure it contains readable text or try a different file format."
+    "PDF_CONTENT_ERROR: This PDF appears to be image-based or scanned. " +
+    "Please use a PDF with selectable text, or try DOCX/TXT format for best results."
   );
 }
 
-/** Simple PDF.js extraction without complex worker setup */
-async function extractWithSimplePdfJs(buffer: Buffer): Promise<string> {
+/** Simple PDF.js extraction with Uint8Array */
+async function extractWithSimplePdfJs(uint8Array: Uint8Array): Promise<string> {
   try {
-    // Use a simpler approach with pdfjs-dist
     const pdfjsLib = await import('pdfjs-dist');
-    
-    // For server-side, use the built-in version without worker
     const pdfjs = pdfjsLib as any;
     
-    // Use a simpler loading approach
+    // Use Uint8Array instead of Buffer
     const doc = await pdfjs.getDocument({
-      data: buffer,
-      useWorker: false, // Disable worker for server-side
+      data: uint8Array,
+      useWorker: false,
       verbosity: 0
     }).promise;
 
     let fullText = '';
+    let totalPages = Math.min(doc.numPages, 10); // Limit to first 10 pages for performance
     
-    for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
       try {
         const page = await doc.getPage(pageNum);
         const textContent = await page.getTextContent();
@@ -93,6 +94,12 @@ async function extractWithSimplePdfJs(buffer: Buffer): Promise<string> {
           .trim();
           
         fullText += pageText + '\n\n';
+        
+        // Early detection of image-based PDF
+        if (pageNum === 2 && isLikelyImageBased(fullText)) {
+          await doc.destroy();
+          throw new Error('PDF appears to be image-based - minimal text extracted');
+        }
       } catch (pageErr) {
         debugLogger("pdfParser", {
           step: "page extraction failed",
@@ -104,25 +111,34 @@ async function extractWithSimplePdfJs(buffer: Buffer): Promise<string> {
     }
     
     await doc.destroy();
-    return cleanExtractedText(fullText);
+    const cleanedText = cleanExtractedText(fullText);
+    
+    if (!isValidContent(cleanedText)) {
+      throw new Error('Extracted content is insufficient or appears to be image-based');
+    }
+    
+    return cleanedText;
   } catch (err) {
     throw new Error(`PDF.js extraction failed: ${err}`);
   }
 }
 
-/** Safe pdf-parse extraction with error handling */
+/** Safe pdf-parse extraction */
 async function extractWithPdfParseSafe(buffer: Buffer): Promise<string> {
   try {
     const pdfParse = await import("pdf-parse");
     const pdfParseFn = pdfParse.default || pdfParse;
     
-    // FIXED: Only pass one argument to avoid TypeScript error
     const data = await pdfParseFn(buffer);
-    
     let text = (data.text || "").trim();
+    
+    // Early detection of image-based PDF
+    if (isLikelyImageBased(text)) {
+      throw new Error('PDF appears to be image-based');
+    }
+    
     return cleanExtractedText(text);
   } catch (err: any) {
-    // Check if it's the test file error and ignore it
     if (err.message && err.message.includes('test/data')) {
       debugLogger("pdfParser", {
         step: "pdf-parse test file error (ignored)",
@@ -134,15 +150,9 @@ async function extractWithPdfParseSafe(buffer: Buffer): Promise<string> {
   }
 }
 
-/** Extract text using iLovePDF API with correct tool name */
+/** iLovePDF API with better error handling */
 async function extractWithILovePdfApi(buffer: Buffer): Promise<string> {
-  // Check if API keys are configured
   if (!process.env.ILOVEPDF_PUBLIC_KEY || !process.env.ILOVEPDF_SECRET_KEY) {
-    debugLogger("pdfParser", {
-      step: "iLovePDF credentials missing",
-      hasPublicKey: !!process.env.ILOVEPDF_PUBLIC_KEY,
-      hasSecretKey: !!process.env.ILOVEPDF_SECRET_KEY
-    });
     throw new Error('iLovePDF API credentials not configured');
   }
 
@@ -152,9 +162,14 @@ async function extractWithILovePdfApi(buffer: Buffer): Promise<string> {
       publicKey: process.env.ILOVEPDF_PUBLIC_KEY?.substring(0, 10) + '...'
     });
 
-    // Use REST API approach with correct tool name
     const text = await extractWithILovePdfRestApi(buffer);
-    return cleanExtractedText(text);
+    const cleanedText = cleanExtractedText(text);
+    
+    if (!isValidContent(cleanedText)) {
+      throw new Error('iLovePDF returned insufficient content');
+    }
+    
+    return cleanedText;
 
   } catch (error) {
     debugLogger("pdfParser", {
@@ -165,15 +180,12 @@ async function extractWithILovePdfApi(buffer: Buffer): Promise<string> {
   }
 }
 
-/** iLovePDF REST API implementation with correct tool name */
+/** iLovePDF REST API implementation */
 async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
   const fetch = await import('node-fetch').then(module => module.default);
   const FormData = await import('form-data').then(module => module.default);
 
   const publicKey = process.env.ILOVEPDF_PUBLIC_KEY!;
-  const secretKey = process.env.ILOVEPDF_SECRET_KEY!;
-
-  debugLogger("pdfParser", { step: "starting iLovePDF authentication" });
 
   // 1. Get authentication token
   const authResponse = await fetch('https://api.ilovepdf.com/v1/auth', {
@@ -196,7 +208,7 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
 
   debugLogger("pdfParser", { step: "iLovePDF authenticated", token: token.substring(0, 10) + '...' });
 
-  // 2. Start a new task with CORRECT tool name
+  // 2. Start a new task
   const taskResponse = await fetch('https://api.ilovepdf.com/v1/start/extract', {
     method: 'GET',
     headers: {
@@ -206,11 +218,6 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
 
   if (!taskResponse.ok) {
     const errorText = await taskResponse.text();
-    debugLogger("pdfParser", {
-      step: "iLovePDF task start failed",
-      status: taskResponse.status,
-      error: errorText
-    });
     throw new Error(`iLovePDF task start failed: ${taskResponse.status} - ${errorText}`);
   }
 
@@ -220,9 +227,10 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
 
   debugLogger("pdfParser", { step: "iLovePDF task started", server, taskId });
 
-  // 3. Upload the file
+  // 3. Upload the file with proper task reference
   const formData = new FormData();
   formData.append('file', buffer, { filename: 'document.pdf' });
+  formData.append('task', taskId); // Include task ID in upload
 
   const uploadResponse = await fetch(`https://${server}/v1/upload`, {
     method: 'POST',
@@ -243,7 +251,7 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
 
   debugLogger("pdfParser", { step: "iLovePDF file uploaded", serverFilename });
 
-  // 4. Process the file with CORRECT tool name
+  // 4. Process the file
   const processResponse = await fetch(`https://${server}/v1/process`, {
     method: 'POST',
     headers: {
@@ -252,7 +260,7 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
     },
     body: JSON.stringify({
       task: taskId,
-      tool: 'extract', // CORRECT tool name
+      tool: 'extract',
       files: [
         {
           server_filename: serverFilename,
@@ -294,83 +302,62 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
   return text;
 }
 
-/** Enhanced content validation */
-function isValidContent(text: string): boolean {
-  if (!text || text.length < 50) return false;
+/** Detect if PDF is likely image-based */
+function isLikelyImageBased(text: string): boolean {
+  if (!text || text.length < 100) return true;
   
   const wordCount = text.split(/\s+/).length;
-  const metadataRatio = calculateMetadataRatio(text);
+  const readableRatio = text.replace(/[^a-zA-Z0-9\s]/g, '').length / text.length;
+  const gibberishScore = calculateGibberishScore(text);
   
-  // More lenient validation
-  return wordCount > 30 && metadataRatio < 0.6;
+  // Image-based PDFs typically have very little readable text
+  return wordCount < 50 || readableRatio < 0.3 || gibberishScore > 0.7;
 }
 
-/** Calculate metadata ratio in text */
-function calculateMetadataRatio(text: string): number {
-  const metadataKeywords = [
-    'producer', 'creator', 'creationdate', 'moddate', 
-    'pdf', 'adobe', 'version', 'trapped', 'keywords',
-    'subject', 'title', 'author', 'page'
-  ];
+/** Calculate gibberish score */
+function calculateGibberishScore(text: string): number {
+  const lines = text.split('\n');
+  let gibberishLines = 0;
   
-  const words = text.toLowerCase().split(/\s+/);
-  if (words.length === 0) return 0;
+  for (const line of lines) {
+    if (line.trim().length < 5) continue;
+    
+    // Check for common gibberish patterns
+    const hasManySpecialChars = (line.replace(/[a-zA-Z0-9\s]/g, '').length / line.length) > 0.4;
+    const hasRepeatedChars = /(.)\1{4,}/.test(line);
+    const hasNoSpaces = !/\s/.test(line) && line.length > 20;
+    
+    if (hasManySpecialChars || hasRepeatedChars || hasNoSpaces) {
+      gibberishLines++;
+    }
+  }
   
-  const metadataWords = words.filter(word => 
-    metadataKeywords.some(keyword => word.includes(keyword))
-  );
-  
-  return metadataWords.length / words.length;
+  return gibberishLines / Math.max(lines.length, 1);
 }
 
-/** Check if text has substantial content */
-function hasSubstantialContent(text: string): boolean {
-  const words = text.split(/\s+/);
-  const uniqueWords = new Set(words.filter(word => word.length > 3));
-  return uniqueWords.size > 15;
-}
-
-/** Check if text is readable (not gibberish) */
-function isReadableText(text: string): boolean {
-  if (!text || text.length < 10) return false;
+/** Enhanced content validation */
+function isValidContent(text: string): boolean {
+  if (!text || text.length < 200) return false;
   
-  const readableChars = text.replace(/[^a-zA-Z0-9\s.,!?;:'"-]/g, '').length;
-  const readabilityScore = readableChars / text.length;
+  const wordCount = text.split(/\s+/).length;
+  const sentenceCount = text.split(/[.!?]+/).length;
+  const gibberishScore = calculateGibberishScore(text);
   
-  const wordCount = (text.match(/\b[a-zA-Z]{3,}\b/g) || []).length;
-  const wordRatio = wordCount / (text.split(/\s+/).length || 1);
-  
-  const hasGibberish = isGibberish(text);
-  
-  return readabilityScore > 0.5 && wordRatio > 0.2 && !hasGibberish;
-}
-
-/** Detect gibberish text */
-function isGibberish(text: string): boolean {
-  const specialCharRatio = (text.replace(/[a-zA-Z0-9\s]/g, '').length) / text.length;
-  if (specialCharRatio > 0.5) return true;
-  
-  const unusualPatterns = [
-    /[{}<>\[\]\\\/]{3,}/g,
-    /[^\x20-\x7E]{3,}/g,
-    /(\S)\1{4,}/g,
-  ];
-  
-  return unusualPatterns.some(pattern => pattern.test(text));
+  // Require substantial, readable content
+  return wordCount > 100 && 
+         sentenceCount > 5 && 
+         gibberishScore < 0.3;
 }
 
 /** Clean extracted text */
 function cleanExtractedText(text: string): string {
   return text
-    // Remove PDF artifacts and operators
     .replace(/\/(Font|F|Type|Subtype|BaseFont|Encoding)\s*\[?[^\s\]]*\]?/g, ' ')
     .replace(/(BT|ET|Tm|Td|Tj|TJ|Tf|TD|T\*)\b/g, ' ')
     .replace(/\[[^\]]*\]/g, ' ')
     .replace(/\([^)]*\)/g, ' ')
-    // Remove common metadata lines
     .replace(/(Producer|Creator|CreationDate|ModDate|Keywords|Subject|Title|Author):.*\n/gi, '')
     .replace(/.*(Adobe|Identity|www\.ilovepdf\.com).*\n/gi, '')
-    // Clean up whitespace and encoding issues
     .replace(/\\[nrt]/g, ' ')
     .replace(/\\[0-9]{3}/g, ' ')
     .replace(/�/g, ' ')

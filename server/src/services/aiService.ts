@@ -4,13 +4,13 @@ import { debugLogger } from "../utils/debugLogger.js";
 import type { Question } from "../utils/types.js";
 
 /* -------------------------------------------------- */
-/* 🧩 Chunk text using LangChain's Recursive Splitter */
+/* 🧩 Enhanced text validation before processing      */
 /* -------------------------------------------------- */
 async function chunkText(text: string, maxChars = 1500): Promise<string[]> {
-  // Enhanced text cleaning with better metadata handling
+  // Enhanced validation for image-based PDFs
   const cleanText = cleanAndValidateText(text);
   
-  if (cleanText.length < 50) { // Reduced from 100 to be more lenient
+  if (cleanText.length < 100) {
     debugLogger("aiService", {
       step: "text-too-short",
       originalLength: text.length,
@@ -20,12 +20,73 @@ async function chunkText(text: string, maxChars = 1500): Promise<string[]> {
     throw new Error("INVALID_CONTENT: Extracted text is too short for quiz generation");
   }
 
+  // Check if text appears to be from image-based PDF
+  if (isLikelyImageBasedPdf(cleanText)) {
+    debugLogger("aiService", {
+      step: "image-based-pdf-detected",
+      textLength: cleanText.length,
+      preview: cleanText.slice(0, 300)
+    });
+    throw new Error("INVALID_CONTENT: This appears to be an image-based PDF. Please use a PDF with selectable text.");
+  }
+
   const splitter = new RecursiveCharacterTextSplitter({
     chunkSize: maxChars,
     chunkOverlap: 200,
   });
   const docs = await splitter.createDocuments([cleanText]);
   return docs.map((d: { pageContent: string }) => d.pageContent);
+}
+
+/* -------------------------------------------------- */
+/* 🔍 Detect image-based PDF content                  */
+/* -------------------------------------------------- */
+function isLikelyImageBasedPdf(text: string): boolean {
+  if (!text || text.length < 200) return true;
+  
+  // Check for PDF metadata patterns that indicate image-based content
+  const pdfMetadataPatterns = [
+    /%PDF-\d\.\d/,
+    /\/Producer.*calibre/,
+    /\/Creator.*calibre/,
+    /\/CreationDate/,
+    /obj[\d\s]+obj/,
+    /stream[\s\S]*?endstream/,
+    /\/Width\s+\d+/,
+    /\/Height\s+\d+/,
+    /\/Filter\s*\/DCTDecode/,
+    /\/ColorSpace\s*\/DeviceRGB/
+  ];
+
+  const metadataMatches = pdfMetadataPatterns.filter(pattern => 
+    pattern.test(text)
+  ).length;
+
+  // Count readable sentences vs gibberish
+  const sentences = text.split(/[.!?]+/);
+  const readableSentences = sentences.filter(sentence => 
+    sentence.trim().length > 20 && 
+    !isGibberish(sentence) &&
+    !isPdfMetadata(sentence)
+  );
+
+  const readableRatio = readableSentences.length / Math.max(sentences.length, 1);
+  
+  // If high metadata count and low readable content, likely image-based
+  return metadataMatches >= 3 && readableRatio < 0.1;
+}
+
+function isPdfMetadata(text: string): boolean {
+  const metadataPatterns = [
+    /^\d+\s+\d+\s+obj$/,
+    /^<<.*>>$/,
+    /^\/\w+\s+/,
+    /^%\w+/,
+    /stream|endstream/,
+    /\/Width|\/Height|\/Filter|\/ColorSpace/
+  ];
+  
+  return metadataPatterns.some(pattern => pattern.test(text.trim()));
 }
 
 /* -------------------------------------------------- */
@@ -42,26 +103,26 @@ function cleanAndValidateText(text: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Check for metadata-heavy content (but be more lenient)
+  // Check for metadata-heavy content
   const metadataRatio = calculateMetadataRatio(cleanText);
-  if (metadataRatio > 0.4) { // Increased threshold from 0.2 to 0.4
+  if (metadataRatio > 0.3) {
     debugLogger("aiService", {
       step: "metadata-heavy-content",
       metadataRatio: metadataRatio,
       preview: cleanText.slice(0, 300)
     });
     
-    // Instead of throwing, try to clean it more aggressively
+    // Try aggressive cleaning
     cleanText = aggressiveCleanText(cleanText);
     
-    // Re-check after aggressive cleaning
+    // Re-check after cleaning
     const newMetadataRatio = calculateMetadataRatio(cleanText);
-    if (newMetadataRatio > 0.3) {
+    if (newMetadataRatio > 0.2) {
       throw new Error("INVALID_CONTENT: Text contains mostly PDF metadata instead of educational content");
     }
   }
 
-  // Check for sufficient educational content (more lenient)
+  // Check for sufficient educational content
   if (!hasSubstantialEducationalContent(cleanText)) {
     debugLogger("aiService", {
       step: "insufficient-educational-content",
@@ -114,7 +175,7 @@ function calculateMetadataRatio(text: string): number {
 }
 
 function hasSubstantialEducationalContent(text: string): boolean {
-  if (!text || text.length < 100) return false; // Reduced from 200
+  if (!text || text.length < 100) return false;
   
   // Count substantial words (longer than 3 characters)
   const words = text.split(/\s+/).filter(word => word.length > 3);
@@ -338,7 +399,7 @@ function validateQuestionQuality(questions: Question[]): boolean {
 }
 
 /* -------------------------------------------------- */
-/* 🚀 Generate Questions using Mistral API            */
+/* 🚀 Generate Questions with better error handling   */
 /* -------------------------------------------------- */
 export async function generateQuestionsFromText(
   text: string,
@@ -370,9 +431,22 @@ export async function generateQuestionsFromText(
   });
 
   const questions: Question[] = [];
+  let consecutiveFailures = 0;
+  const maxConsecutiveFailures = 5;
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
+    
+    // Skip if too many consecutive failures
+    if (consecutiveFailures >= maxConsecutiveFailures) {
+      debugLogger("aiService", {
+        step: "too-many-failures",
+        consecutiveFailures,
+        stopping: true
+      });
+      break;
+    }
+
     const prompt = buildPrompt(chunk, perChunk, difficulty);
 
     try {
@@ -404,6 +478,10 @@ export async function generateQuestionsFromText(
           statusText: response.statusText,
           errorBody: errText.slice(0, 500),
         });
+        
+        if (response.status === 429) {
+          throw new Error("Rate limit exceeded. Please try again later.");
+        }
         throw new Error(
           `Mistral API error (${response.status}): ${response.statusText}`
         );
@@ -432,7 +510,12 @@ export async function generateQuestionsFromText(
         parsedCount: parsed.length
       });
 
-      questions.push(...parsed);
+      if (parsed.length > 0) {
+        questions.push(...parsed);
+        consecutiveFailures = 0; // Reset counter on success
+      } else {
+        consecutiveFailures++;
+      }
 
       if (questions.length >= numQuestions) {
         debugLogger("aiService", {
@@ -449,11 +532,14 @@ export async function generateQuestionsFromText(
         error: err.message,
       });
       
+      consecutiveFailures++;
+      
       // Re-throw specific content validation errors
       if (err.message.includes('INVALID_CONTENT') || 
           err.message.includes('POOR_QUALITY_QUESTIONS')) {
         throw err;
       }
+      
       // Continue with next chunk for other errors
     }
   }
@@ -465,7 +551,7 @@ export async function generateQuestionsFromText(
   });
 
   if (questions.length === 0) {
-    throw new Error("No questions could be generated from the provided text. The text may be too short, low quality, or contain mostly metadata.");
+    throw new Error("No questions could be generated. The document may be image-based, contain insufficient content, or the AI service is unavailable.");
   }
 
   return questions.slice(0, numQuestions);
