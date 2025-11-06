@@ -6,27 +6,8 @@ import { debugLogger } from "../utils/debugLogger.js";
 
 const router = express.Router();
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    const allowed = [
-      "application/pdf",
-      "application/epub+zip",
-      "application/msword",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "text/plain",
-      "text/html",
-      "text/csv",
-    ];
-    if (!allowed.includes(file.mimetype)) {
-      return cb(new Error(`Unsupported file type: ${file.mimetype}`));
-    }
-    cb(null, true);
-  },
-});
+// ✅ USE THE SAME UPLOAD CONFIGURATION AS AI ROUTES
+import { upload } from "../middleware/upload.js";
 
 // ✅ Apply lightweight CORS headers on this route
 router.options("/extract-chapters", (req, res) => {
@@ -68,6 +49,30 @@ router.post("/extract-chapters", upload.single("file"), async (req, res) => {
     });
 
     const text = await parseFile(req.file.buffer, req.file.originalname);
+    
+    // For image files, we might not get meaningful chapters, so handle gracefully
+    const isImageFile = /\.(png|jpg|jpeg|gif)$/i.test(req.file.originalname);
+    
+    if (isImageFile) {
+      debugLogger("chapterRoutes", {
+        step: "image-file-detected",
+        textLength: text.length
+      });
+      
+      // For images, return the full text as a single "chapter"
+      if (text && text.length > 100) {
+        const imageChapter = {
+          title: "Image Content",
+          content: text,
+          index: 0
+        };
+        return res.json({ ok: true, chapters: [imageChapter], fallback: false });
+      } else {
+        // If OCR didn't extract much text, return fallback
+        return res.json({ ok: true, chapters: [], fallback: true, text: text || "" });
+      }
+    }
+
     const chapters = extractChaptersFromText(text);
 
     debugLogger("chapterRoutes", {
@@ -83,10 +88,18 @@ router.post("/extract-chapters", upload.single("file"), async (req, res) => {
 
     res.json({ ok: true, chapters });
   } catch (err: any) {
-    debugLogger("chapterRoutes", { step: "error", error: err });
-    res
-      .status(500)
-      .json({ error: err.message || "Failed to extract chapters" });
+    debugLogger("chapterRoutes", { step: "error", error: err.message });
+    
+    // Provide user-friendly error messages
+    let errorMessage = err.message || "Failed to extract chapters";
+    
+    if (err.message.includes('Unsupported file type')) {
+      errorMessage = "This file type is not supported for chapter extraction. Please use PDF, DOCX, TXT, or image files.";
+    } else if (err.message.includes('OCR') || err.message.includes('image')) {
+      errorMessage = "Unable to extract text from this image. Please try a clearer image or a different file format.";
+    }
+    
+    res.status(500).json({ error: errorMessage });
   }
 });
 

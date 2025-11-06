@@ -39,10 +39,13 @@ const fileFilter = (
     allowedMime.includes(file.mimetype) ||
     /\.(pdf|docx?|txt|csv|md|png|jpe?g|gif|html?|epub|pptx?|xlsx?)$/i.test(file.originalname);
 
-  if (allowed) return callback(null, true);
+  if (allowed) {
+    console.log("✅ File accepted:", file.mimetype);
+    return callback(null, true);
+  }
 
   console.warn("⚠️ Rejected file type:", file.mimetype);
-  callback(new Error("Unsupported file type"));
+  callback(new Error(`Unsupported file type: ${file.mimetype}. Supported types: PDF, DOCX, TXT, Images, etc.`));
 };
 
 export const upload = multer({

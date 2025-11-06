@@ -27,6 +27,7 @@ export async function generateQuiz(req: Request, res: Response) {
         step: "processing-file",
         filename: req.file.originalname,
         size: req.file.size,
+        mimetype: req.file.mimetype,
         selectedChapterIndexes: indexes
       });
 
@@ -96,6 +97,8 @@ export async function generateQuiz(req: Request, res: Response) {
       userMessage = "This document appears to be image-based or contains insufficient text. Please use a document with selectable text.";
     } else if (err.message.includes('Mistral API')) {
       userMessage = "AI service temporarily unavailable. Please try again in a few moments.";
+    } else if (err.message.includes('OCR') || err.message.includes('image')) {
+      userMessage = "Unable to extract readable text from this image. Please try a clearer image with visible text.";
     }
     
     res.status(500).json({
