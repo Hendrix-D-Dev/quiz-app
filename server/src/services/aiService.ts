@@ -122,7 +122,7 @@ function cleanAndValidateText(text: string): string {
     }
   }
 
-  // Check for sufficient educational content
+  // Check for sufficient educational content - MORE LENIENT
   if (!hasSubstantialEducationalContent(cleanText)) {
     debugLogger("aiService", {
       step: "insufficient-educational-content",
@@ -174,20 +174,21 @@ function calculateMetadataRatio(text: string): number {
   return metadataWords.length / words.length;
 }
 
+/* -------------------------------------------------- */
+/* 🧠 MORE LENIENT educational content validation     */
+/* -------------------------------------------------- */
 function hasSubstantialEducationalContent(text: string): boolean {
-  if (!text || text.length < 100) return false;
+  if (!text || text.length < 50) return false;
   
-  // Count substantial words (longer than 3 characters)
-  const words = text.split(/\s+/).filter(word => word.length > 3);
-  const uniqueWords = new Set(words);
+  // Count words (reduced threshold)
+  const words = text.split(/\s+/).filter(word => word.length > 2);
   
-  // Count sentences
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 10);
+  // Count sentences (reduced threshold)
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 8);
   
-  // More lenient criteria
-  return words.length >= 50 || // At least 50 substantial words
-         uniqueWords.size >= 20 || // Or 20 unique words  
-         sentences.length >= 2; // Or 2 sentences
+  // Much more lenient criteria
+  return words.length >= 30 || // Only 30 words minimum
+         sentences.length >= 2; // Only 2 sentences minimum
 }
 
 function isMetadataLine(line: string): boolean {
@@ -342,7 +343,7 @@ function safeParse(raw: string): Question[] {
       };
     }).filter(Boolean) as Question[]; // Remove null entries
 
-    // Validate question quality (more lenient)
+    // Validate question quality (MORE LENIENT)
     if (!validateQuestionQuality(questions)) {
       throw new Error('POOR_QUALITY_QUESTIONS: Questions appear to be based on metadata or poor content');
     }
@@ -365,7 +366,7 @@ function safeParse(raw: string): Question[] {
 }
 
 /* -------------------------------------------------- */
-/* 🔍 Validate question quality (more lenient)        */
+/* 🔍 Validate question quality (MORE LENIENT)        */
 /* -------------------------------------------------- */
 function validateQuestionQuality(questions: Question[]): boolean {
   if (!questions || questions.length === 0) return false;
@@ -385,17 +386,35 @@ function validateQuestionQuality(questions: Question[]): boolean {
       questionText.includes(keyword)
     );
 
-    // Check question structure quality
-    const hasGoodStructure = question.question.length > 15 && // Reduced from 20
-                            question.question.length < 250;
+    // More lenient structure requirements
+    const hasGoodStructure = question.question.length > 10 && // Reduced from 15
+                            question.question.length < 300 && // Increased max length
+                            question.options?.length === 4;
 
     if (!hasMetadataFocus && hasGoodStructure) {
       qualityQuestions++;
+    } else {
+      debugLogger("aiService", {
+        step: "question-rejected",
+        reason: hasMetadataFocus ? "metadata-focus" : "poor-structure",
+        question: question.question.substring(0, 100)
+      });
     }
   }
 
-  // More lenient: At least 40% of questions should be quality questions (reduced from 60%)
-  return qualityQuestions / questions.length >= 0.4;
+  // Much more lenient: At least 30% of questions should be quality questions
+  const qualityRatio = qualityQuestions / questions.length;
+  const isValid = qualityRatio >= 0.3;
+  
+  debugLogger("aiService", {
+    step: "quality-validation",
+    totalQuestions: questions.length,
+    qualityQuestions,
+    qualityRatio,
+    isValid
+  });
+
+  return isValid;
 }
 
 /* -------------------------------------------------- */

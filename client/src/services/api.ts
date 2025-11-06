@@ -20,7 +20,7 @@ console.log("🌍 Using API Base URL:", baseURL);
 const api = axios.create({
   baseURL: `${baseURL}/api`,
   withCredentials: false,
-  timeout: 60000, // Increased timeout for file processing
+  timeout: 120000, // Increased timeout for file processing (2 minutes)
 });
 
 // Enhanced Firebase token management
@@ -173,6 +173,13 @@ api.interceptors.response.use(
     // Handle timeouts
     if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
       console.error("⏰ Request timeout");
+      return Promise.reject(new Error("Request timed out. The server might be processing a large file. Please try again."));
+    }
+
+    // Handle network errors
+    if (!error.response) {
+      console.error("🌐 Network error - no response received");
+      return Promise.reject(new Error("Network error. Please check your internet connection and try again."));
     }
 
     return Promise.reject(error);
@@ -221,6 +228,11 @@ export async function processDocument(file: File) {
         "The document doesn't contain enough text for quiz generation. " +
         "Please use a document with more substantial educational content."
       );
+    } else if (errorMessage.includes('Mistral API') || errorMessage.includes('AI service')) {
+      throw new Error(
+        "The AI service is temporarily unavailable. " +
+        "Please try again in a few moments."
+      );
     } else {
       throw new Error(err.response?.data?.error || "Failed to process document");
     }
@@ -248,15 +260,24 @@ export async function generateQuiz(
 }
 
 // ========================================
-// 📄 CHAPTER EXTRACTION
+// 📄 CHAPTER EXTRACTION - ENHANCED
 // ========================================
 export async function extractChapters(file: File) {
   const formData = new FormData();
   formData.append("file", file);
 
   try {
+    console.log("📚 Extracting chapters from:", file.name);
     const res = await api.post("/chapter/extract-chapters", formData, {
       headers: { "Content-Type": "multipart/form-data" },
+      timeout: 60000, // 60 second timeout for chapter extraction
+    });
+
+    console.log("📖 Chapter extraction result:", {
+      hasChapters: !!res.data?.chapters,
+      chapterCount: res.data?.chapters?.length || 0,
+      hasFallback: !!res.data?.fallback,
+      hasText: !!res.data?.text
     });
 
     if (res.data?.fallback) {
@@ -264,10 +285,29 @@ export async function extractChapters(file: File) {
       return { chapters: [], fallback: true, text: res.data.text };
     }
 
+    // Return chapters even if empty array - let the UI handle it
     return { chapters: res.data?.chapters || [], fallback: false };
   } catch (err: any) {
     console.error("❌ extractChapters failed:", err);
-    throw new Error(err?.response?.data?.error || "Failed to extract chapters");
+    
+    // Enhanced error handling
+    const errorMessage = err.response?.data?.error || err.message;
+    
+    if (errorMessage.includes('PDF_CONTENT_ERROR') || 
+        errorMessage.includes('image-based') ||
+        errorMessage.includes('scanned')) {
+      throw new Error(
+        "This PDF appears to be image-based or scanned. " +
+        "Please try a PDF with selectable text, or use DOCX/TXT format for best results."
+      );
+    } else if (errorMessage.includes('timeout')) {
+      throw new Error(
+        "Chapter extraction timed out. The document might be too large. " +
+        "Please try a smaller document or paste the text directly."
+      );
+    } else {
+      throw new Error(err.response?.data?.error || "Failed to extract chapters from document");
+    }
   }
 }
 

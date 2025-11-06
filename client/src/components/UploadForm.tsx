@@ -15,6 +15,7 @@ const UploadForm = ({ onUploadComplete }: Props) => {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [showSelector, setShowSelector] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -22,6 +23,7 @@ const UploadForm = ({ onUploadComplete }: Props) => {
       setFile(selectedFile);
       setText("");
       setError(null); // Clear previous errors when new file is selected
+      setUploadProgress(0);
     }
   };
 
@@ -30,41 +32,56 @@ const UploadForm = ({ onUploadComplete }: Props) => {
     
     setLoading(true);
     setError(null);
+    setUploadProgress(30); // Indicate chapter extraction started
     
     try {
       const result = await extractChapters(file);
+      setUploadProgress(70); // Chapters extracted
       
-      if (result.fallback && result.text) {
+      // ALWAYS show selector if we have chapters, even if only one
+      if (result.chapters && result.chapters.length > 0) {
+        console.log(`📚 Showing chapter selector with ${result.chapters.length} chapters`);
+        setChapters(result.chapters);
+        setShowSelector(true);
+        setUploadProgress(100);
+      } 
+      // Handle fallback case (no chapters detected)
+      else if (result.fallback && result.text) {
+        console.log("📄 No chapters detected, using fallback quarters");
         const useFallback = confirm(
-          "No chapters were detected. Would you like to divide the document into quarters and pick one for the quiz?"
+          "No chapters were detected. Would you like to divide the document into quarters and pick sections for the quiz?"
         );
         if (useFallback) {
           const quarters = chunkIntoQuarters(result.text);
           setChapters(quarters);
           setShowSelector(true);
-          return;
+          setUploadProgress(100);
         } else {
+          // User doesn't want fallback, proceed with full text
           await handleSubmitCore();
-          return;
         }
       }
-
-      if (result.chapters.length <= 1) {
+      // No chapters and no fallback - just proceed
+      else {
+        console.log("📄 No chapters available, proceeding with full document");
         await handleSubmitCore();
-      } else {
-        setChapters(result.chapters);
-        setShowSelector(true);
       }
     } catch (err: any) {
       console.error("❌ Chapter extraction error:", err);
       const errorMessage = err.message || "Could not extract chapters from this document.";
       setError(errorMessage);
+      setUploadProgress(0);
       
       // Special handling for PDF content errors
       if (errorMessage.includes('PDF_CONTENT_ERROR') || errorMessage.includes('image-based') || errorMessage.includes('scanned')) {
         setError(
           "This PDF appears to be image-based or scanned. " +
           "Please try a PDF with selectable text, or use DOCX/TXT format for best results."
+        );
+      } else if (errorMessage.includes('INVALID_CONTENT') || errorMessage.includes('mostly metadata')) {
+        setError(
+          "The document contains mostly technical metadata instead of educational content. " +
+          "Please try a different document with substantial text content."
         );
       }
     } finally {
@@ -91,6 +108,7 @@ const UploadForm = ({ onUploadComplete }: Props) => {
   const handleSubmitCore = async (selectedIndexes?: number[]) => {
     setLoading(true);
     setError(null);
+    setUploadProgress(20);
     
     try {
       const formData = new FormData();
@@ -106,24 +124,40 @@ const UploadForm = ({ onUploadComplete }: Props) => {
       const user = auth.currentUser;
       const token = user ? await user.getIdToken() : null;
 
+      setUploadProgress(40);
+      
       const res = await api.post("/ai/generate-quiz", formData, {
         headers: {
           "Content-Type": "multipart/form-data",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const progress = (progressEvent.loaded / progressEvent.total) * 100;
+            setUploadProgress(40 + progress * 0.4); // 40-80% for upload
+          }
+        },
       });
+
+      setUploadProgress(90); // Processing complete
 
       const questions = res.data?.questions || [];
       if (!questions.length) {
         setError("No questions were generated from the selected content. The text might be too short or not suitable for quiz generation.");
+        setUploadProgress(0);
         return;
       }
       
-      onUploadComplete(questions);
+      setUploadProgress(100);
+      setTimeout(() => {
+        onUploadComplete(questions);
+      }, 500);
+      
     } catch (err: any) {
       console.error("❌ Upload error:", err);
       const errorMessage = err?.response?.data?.error || err.message || "Error generating quiz";
       setError(errorMessage);
+      setUploadProgress(0);
       
       // Enhanced error handling for specific cases
       if (errorMessage.includes('PDF_CONTENT_ERROR')) {
@@ -141,6 +175,11 @@ const UploadForm = ({ onUploadComplete }: Props) => {
         setError(
           "The document doesn't contain enough text for quiz generation. " +
           "Please use a document with more substantial educational content."
+        );
+      } else if (errorMessage.includes('Mistral API') || errorMessage.includes('AI service')) {
+        setError(
+          "The AI service is temporarily unavailable. " +
+          "Please try again in a few moments."
         );
       }
     } finally {
@@ -167,12 +206,20 @@ const UploadForm = ({ onUploadComplete }: Props) => {
   const removeFile = () => {
     setFile(null);
     setError(null);
+    setUploadProgress(0);
     const fileInput = document.getElementById("file-upload") as HTMLInputElement;
     if (fileInput) fileInput.value = "";
   };
 
   const clearError = () => {
     setError(null);
+  };
+
+  const getProgressColor = () => {
+    if (uploadProgress < 40) return "bg-indigo-600";
+    if (uploadProgress < 70) return "bg-blue-600";
+    if (uploadProgress < 90) return "bg-green-500";
+    return "bg-emerald-500";
   };
 
   return (
@@ -194,6 +241,22 @@ const UploadForm = ({ onUploadComplete }: Props) => {
           </h2>
           <p className="text-slate-600">Upload a document or paste text to create your quiz</p>
         </div>
+
+        {/* Progress Bar */}
+        {uploadProgress > 0 && uploadProgress < 100 && (
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm text-slate-600">
+              <span>Processing document...</span>
+              <span>{Math.round(uploadProgress)}%</span>
+            </div>
+            <div className="w-full bg-slate-200 rounded-full h-2">
+              <div 
+                className={`h-2 rounded-full transition-all duration-300 ${getProgressColor()}`}
+                style={{ width: `${uploadProgress}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
 
         {/* Error Display */}
         {error && (
@@ -384,7 +447,10 @@ const UploadForm = ({ onUploadComplete }: Props) => {
           <ChapterSelector
             chapters={chapters}
             onConfirm={handleSubmitSelected}
-            onCancel={() => setShowSelector(false)}
+            onCancel={() => {
+              setShowSelector(false);
+              setUploadProgress(0);
+            }}
           />
         </div>
       )}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Chapter } from "../utils/types";
 
 interface Props {
@@ -9,6 +9,14 @@ interface Props {
 
 const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
   const [selected, setSelected] = useState<string[]>([]);
+
+  // Auto-select all chapters when component mounts
+  useEffect(() => {
+    if (chapters.length > 0) {
+      const allIds = chapters.map((c, i) => c.title || `chapter-${i}`);
+      setSelected(allIds);
+    }
+  }, [chapters]);
 
   const toggle = (id: string) => {
     setSelected((prev) =>
@@ -24,7 +32,41 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
     setSelected([]);
   };
 
-  const isQuarterMode = chapters.some((c) => c.title.startsWith("Quarter"));
+  const isQuarterMode = chapters.some((c) => c.title?.startsWith("Quarter"));
+  const isPartMode = chapters.some((c) => c.title?.startsWith("Part"));
+  const isDocumentMode = chapters.some((c) => c.title === "Document Content");
+
+  // Determine selector mode based on chapter titles
+  const getSelectorMode = () => {
+    if (isQuarterMode) return "quarters";
+    if (isPartMode) return "parts"; 
+    if (isDocumentMode) return "document";
+    return "chapters";
+  };
+
+  const selectorMode = getSelectorMode();
+
+  const getModeTitle = () => {
+    switch (selectorMode) {
+      case "quarters": return "Select Document Quarters";
+      case "parts": return "Select Document Parts";
+      case "document": return "Select Document Sections";
+      default: return "Select Chapters";
+    }
+  };
+
+  const getModeDescription = () => {
+    switch (selectorMode) {
+      case "quarters": 
+        return "Choose document quarters to generate questions from";
+      case "parts":
+        return "Choose document parts to generate questions from";
+      case "document":
+        return "Choose document sections to include in your quiz";
+      default:
+        return "Pick chapters to include in your quiz";
+    }
+  };
 
   return (
     <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full mx-auto overflow-hidden animate-fade-in">
@@ -39,7 +81,7 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
             </div>
             <div>
               <h2 className="text-2xl font-bold">
-                {isQuarterMode ? "Select Document Quarters" : "Select Chapters"}
+                {getModeTitle()}
               </h2>
               <p className="text-indigo-100 text-sm">
                 {selected.length} of {chapters.length} selected
@@ -58,9 +100,7 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
           )}
         </div>
         <p className="text-indigo-100 text-sm">
-          {isQuarterMode
-            ? "Choose document sections to generate questions from"
-            : "Pick chapters to include in your quiz"}
+          {getModeDescription()}
         </p>
       </div>
 
@@ -81,7 +121,7 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
           </button>
         </div>
         <span className="text-sm text-slate-600 font-medium">
-          {chapters.length} {chapters.length === 1 ? "chapter" : "chapters"} available
+          {chapters.length} {selectorMode} available
         </span>
       </div>
 
@@ -123,11 +163,11 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
               {/* Chapter Info */}
               <div className="flex-1">
                 <span className={`font-semibold block ${isSelected ? "text-indigo-900" : "text-slate-800"}`}>
-                  {ch.title || `Chapter ${i + 1}`}
+                  {ch.title || `${selectorMode.slice(0, -1)} ${i + 1}`}
                 </span>
                 {ch.content && (
                   <span className="text-xs text-slate-500 mt-1 block">
-                    {Math.round(ch.content.length / 500)} min read
+                    {Math.ceil(ch.content.length / 1000)} min read • {ch.content.length.toLocaleString()} chars
                   </span>
                 )}
               </div>
@@ -149,10 +189,10 @@ const ChapterSelector = ({ chapters, onConfirm, onCancel }: Props) => {
       <div className="p-6 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-4">
         <div className="text-sm text-slate-600">
           {selected.length === 0 ? (
-            <span>Please select at least one chapter</span>
+            <span>Please select at least one {selectorMode.slice(0, -1)}</span>
           ) : (
             <span className="font-semibold text-indigo-600">
-              Ready to generate {selected.length} {selected.length === 1 ? "chapter" : "chapters"}
+              Ready to generate from {selected.length} {selected.length === 1 ? selectorMode.slice(0, -1) : selectorMode}
             </span>
           )}
         </div>

@@ -302,16 +302,16 @@ async function extractWithILovePdfRestApi(buffer: Buffer): Promise<string> {
   return text;
 }
 
-/** Detect if PDF is likely image-based */
+/** Detect if PDF is likely image-based - MORE LENIENT */
 function isLikelyImageBased(text: string): boolean {
-  if (!text || text.length < 100) return true;
+  if (!text || text.length < 50) return true;
   
   const wordCount = text.split(/\s+/).length;
-  const readableRatio = text.replace(/[^a-zA-Z0-9\s]/g, '').length / text.length;
-  const gibberishScore = calculateGibberishScore(text);
+  const readableChars = text.replace(/[^a-zA-Z0-9\s]/g, '').length;
+  const readableRatio = readableChars / text.length;
   
-  // Image-based PDFs typically have very little readable text
-  return wordCount < 50 || readableRatio < 0.3 || gibberishScore > 0.7;
+  // More lenient - only reject obvious image-based PDFs
+  return wordCount < 20 || readableRatio < 0.1;
 }
 
 /** Calculate gibberish score */
@@ -335,18 +335,21 @@ function calculateGibberishScore(text: string): number {
   return gibberishLines / Math.max(lines.length, 1);
 }
 
-/** Enhanced content validation */
+/** Enhanced content validation - MORE LENIENT */
 function isValidContent(text: string): boolean {
-  if (!text || text.length < 200) return false;
+  if (!text || text.trim().length === 0) return false;
   
-  const wordCount = text.split(/\s+/).length;
-  const sentenceCount = text.split(/[.!?]+/).length;
-  const gibberishScore = calculateGibberishScore(text);
+  const cleanText = text.trim();
+  const wordCount = cleanText.split(/\s+/).length;
   
-  // Require substantial, readable content
-  return wordCount > 100 && 
-         sentenceCount > 5 && 
-         gibberishScore < 0.3;
+  // Much more lenient criteria - focus on having SOME content
+  if (wordCount < 30) return false;
+  
+  // Check for substantial content (reduced threshold)
+  const sentences = cleanText.split(/[.!?]+/).filter(s => s.trim().length > 10);
+  const uniqueWords = new Set(cleanText.toLowerCase().split(/\s+/));
+  
+  return sentences.length >= 2 || uniqueWords.size >= 15;
 }
 
 /** Clean extracted text */
