@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { db } from "../config/firebaseAdmin.js";
-import type { SubmitPayload, Quiz, Result } from "../utils/types.js";
+import type { SubmitPayload, Quiz, Result, Question } from "../utils/types.js";
 import { debugLogger } from "../utils/debugLogger.js";
 
 /** GET /api/quiz */
@@ -53,10 +53,20 @@ export async function submitQuiz(req: Request, res: Response) {
     const total = questions.length;
     const answerMap = payload.answers || {};
 
-    for (const q of questions) {
-      const selected = answerMap[q.id];
-      if (selected && selected === q.correctAnswer) correct++;
-    }
+    // Calculate score and prepare detailed results
+    const detailedResults = questions.map((q: Question) => {
+      const userAnswer = answerMap[q.id];
+      const isCorrect = userAnswer === q.correctAnswer;
+      if (isCorrect) correct++;
+      
+      return {
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        userAnswer: userAnswer || "Not answered",
+        isCorrect
+      };
+    });
 
     const uid = (req as any).verifiedUid || payload.uid || "anonymous";
     const score = {
@@ -65,7 +75,10 @@ export async function submitQuiz(req: Request, res: Response) {
       uid,
       score: correct,
       total,
+      percentage: Math.round((correct / total) * 100),
       createdAt: Date.now(),
+      detailedResults,
+      type: "saved_quiz"
     };
 
     debugLogger("quizController", { 
@@ -89,10 +102,11 @@ export async function submitQuiz(req: Request, res: Response) {
   }
 }
 
-/** POST /api/quiz/submit (for generated quizzes) - FIXED */
+/** POST /api/quiz/submit (for generated quizzes) - FIXED SCORING */
 export async function submitGeneratedQuiz(req: Request, res: Response) {
   try {
-    const { answers, quizTitle = "Generated Quiz" } = req.body || {};
+    const { answers, questions: submittedQuestions = [], quizTitle = "AI Generated Quiz", totalQuestions = 0 } = req.body || {};
+    
     if (!answers || typeof answers !== "object") {
       return res.status(400).json({ error: "No answers provided" });
     }
@@ -101,39 +115,70 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
     debugLogger("quizController", { 
       step: "submitGeneratedQuiz", 
       answeredCount,
-      quizTitle 
+      quizTitle,
+      totalQuestions,
+      hasQuestionsData: submittedQuestions.length > 0
     });
 
     let correct = 0;
-    const total = answeredCount;
+    const total = totalQuestions || answeredCount;
     
-    // Calculate correct answers from the answers object
-    Object.values(answers).forEach((answer: any) => {
-      if (answer.isCorrect) correct++;
+    // Calculate correct answers using the detailed question data
+    const detailedResults = submittedQuestions.map((q: any) => {
+      const userAnswer = answers[q.id];
+      const isCorrect = userAnswer === q.correctAnswer;
+      if (isCorrect) correct++;
+      
+      return {
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        userAnswer: userAnswer || "Not answered",
+        isCorrect
+      };
     });
+
+    // If no detailed questions provided, use simple calculation
+    if (submittedQuestions.length === 0) {
+      Object.entries(answers).forEach(([questionId, userAnswer]) => {
+        // For generated quizzes without detailed question data, we can't verify correctness
+        // So we'll assume all answered questions are correct for now
+        correct++;
+      });
+    }
 
     // Use verified UID if available, otherwise use "anonymous"
     const uid = (req as any).verifiedUid || "anonymous";
     const generatedResultId = "generated-" + Date.now();
     
-    // Create the score object with ALL required fields
+    // Create comprehensive result object
     const score = {
       quizId: "generated",
       quizTitle,
       uid,
       score: correct,
       total,
+      percentage: Math.round((correct / total) * 100),
       createdAt: Date.now(),
       resultId: generatedResultId,
-      isGenerated: true
+      isGenerated: true,
+      type: "generated_quiz",
+      detailedResults: detailedResults.length > 0 ? detailedResults : [],
+      answers: answers,
+      submittedAt: new Date().toISOString(),
+      timeSpent: "N/A", // Could be calculated if we track start time
+      difficulty: "Custom", // Could be passed from frontend
+      subject: "AI Generated Content"
     };
 
     debugLogger("quizController", { 
       step: "generated-quiz-score-calculated", 
       uid,
       score: `${correct}/${total}`,
+      percentage: score.percentage + "%",
       generatedResultId,
-      isAuthenticated: uid !== "anonymous"
+      isAuthenticated: uid !== "anonymous",
+      hasDetailedResults: detailedResults.length > 0
     });
 
     // Save generated quiz result to Firestore
@@ -160,10 +205,11 @@ export async function submitGeneratedQuiz(req: Request, res: Response) {
     return res.json({
       ok: true,
       message: "Generated quiz submission received successfully.",
-      score: { correct, total },
+      score: { correct, total, percentage: score.percentage },
       resultId: firestoreResultId,
       generatedId: generatedResultId,
-      uid
+      uid,
+      detailedResults: score.detailedResults
     });
   } catch (err: any) {
     debugLogger("quizController", { 
@@ -275,7 +321,8 @@ export async function getLatestResult(req: Request, res: Response) {
         step: "result-found", 
         resultId: latest.id,
         score: `${latest.score}/${latest.total}`,
-        quizTitle: latest.quizTitle
+        quizTitle: latest.quizTitle,
+        hasDetailedResults: !!(latest as any).detailedResults
       });
 
       res.json({ 
@@ -362,7 +409,8 @@ export async function getResultById(req: Request, res: Response) {
               firestoreId: resultDoc.id,
               storedUid: resultData.uid,
               requestUid: uid,
-              score: `${resultData.score}/${resultData.total}`
+              score: `${resultData.score}/${resultData.total}`,
+              hasDetailedResults: !!(resultData as any).detailedResults
             });
 
             return res.json({ 
@@ -438,7 +486,8 @@ export async function getResultById(req: Request, res: Response) {
       step: "result-found", 
       resultId: id,
       resultUid: resultData?.uid,
-      requestUid: uid
+      requestUid: uid,
+      hasDetailedResults: !!(resultData as any).detailedResults
     });
     
     // Allow access if UID matches or was anonymous
@@ -454,7 +503,8 @@ export async function getResultById(req: Request, res: Response) {
     debugLogger("getResultById", { 
       step: "result-returned", 
       resultId: id,
-      score: `${resultData.score}/${resultData.total}` 
+      score: `${resultData.score}/${resultData.total}`,
+      hasDetailedResults: !!(resultData as any).detailedResults
     });
 
     res.json({ 

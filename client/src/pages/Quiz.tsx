@@ -57,10 +57,24 @@ const Quiz = () => {
     setIsSubmitting(true);
     try {
       let resultId: string | null = null;
-      const res = await api.post(id ? `/quiz/${id}/submit` : "/quiz/submit", {
+      
+      // Prepare submission data with detailed answer information
+      const submissionData = {
         answers,
+        questions: questions.map(q => ({
+          id: q.id,
+          question: q.question,
+          options: q.options,
+          correctAnswer: q.correctAnswer,
+          userAnswer: answers[q.id] || null,
+          isCorrect: answers[q.id] === q.correctAnswer
+        })),
         roomMode,
-      });
+        quizTitle: "AI Generated Quiz", // Default title for generated quizzes
+        totalQuestions: total
+      };
+
+      const res = await api.post(id ? `/quiz/${id}/submit` : "/quiz/submit", submissionData);
       resultId = res.data?.resultId || null;
 
       setSubmitted(true);
